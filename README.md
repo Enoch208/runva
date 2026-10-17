@@ -102,7 +102,7 @@ Key files: [`orchestrator.ts`](web/src/lib/runva/orchestrator.ts) (state machine
 
 **The LLM never decides pass/fail.** A model grading its own patch gives you a confidence score, not evidence. The model writes tests and patches, and its diagnosis is shown as a claim. `VERIFIED` is computed by host code from the frozen verifier's exit code, its parsed `runva.verdict.v1` JSON, and the in-VM verifier hash. The model's own tests count as evidence that the bug was reproduced. They don't gate the verdict, because a model can write weak tests that its own patch passes.
 
-**The verifier is frozen, hash-pinned, and runs each case in a worker.** If the patching model could see or edit the judge, it could optimize for the judge instead of the contract. So the verifier lives in the host repo and is never sent to the model. It's re-uploaded before every candidate run, so a candidate can't overwrite it in between, and its SHA-256 is pinned on the host and measured again inside the final VM. Each case runs in its own `worker_thread`, which gives three guarantees: module-level state from one case (a dedupe `Set`, say) can't leak into the next and make it pass by accident; a synchronous busy-loop gets hard-killed instead of hanging the run; and fulfillments are counted in a closure the handler can't reach.
+**The verifier is frozen, hash-pinned, and runs each case in a worker.** If the patching model could see or edit the judge, it could optimize for the judge instead of the contract. So the verifier lives in the host repo and its source is never sent to the model. The model only sees its failure output, which is the evidence it repairs from. It's re-uploaded before every candidate run, so a candidate can't overwrite it in between, and its SHA-256 is pinned on the host and measured again inside the final VM. Each case runs in its own `worker_thread`, which gives three guarantees: module-level state from one case (a dedupe `Set`, say) can't leak into the next and make it pass by accident; a synchronous busy-loop gets hard-killed instead of hanging the run; and fulfillments are counted in a closure the handler can't reach.
 
 **The final verdict uses a fresh VM.** By the end of the repair loop, the work VM has run model-written tests and up to three candidates. Anything they left behind (stray files, background work, a modified `verification.mjs`) could affect a re-run in the same VM. The final VM holds only the final handler and the frozen verifier, so nothing the model's code touched is in the room. The work VM is destroyed first, and every VM is destroyed in `finally` on success, failure, timeout and cancel. If a create call times out, RUNVA cleans up the orphan by its unique run-scoped name.
 
@@ -118,23 +118,25 @@ Key files: [`orchestrator.ts`](web/src/lib/runva/orchestrator.ts) (state machine
 
 ## Evidence
 
-Real run receipts are committed in [`evidence/runs/`](evidence/runs/). Each one is a Markdown receipt downloaded from `GET /api/runs/:id/report` after a real run. It records the run status, the CreateOS sandboxes used (shortened IDs, shape, region, destroyed or not), the egress check, each command with its exit code and output tail, frozen-verifier results against the baseline and the final candidate, every patch attempt, the code diff, and SHA-256 identifiers.
+Real run receipts are committed in [`evidence/runs/`](evidence/runs/). Each one is a receipt downloaded after a real run, from `GET /api/runs/:id/report` (Markdown) or `GET /api/runs/:id/receipt.json`. It records the run status, the CreateOS sandboxes used (shortened IDs, shape, region, destroyed or not), the egress check, each command with its exit code and output tail, frozen-verifier results against the baseline and the final candidate, every patch attempt, the code diff, and SHA-256 identifiers.
 
 For actual counts, durations and attempt numbers, see `evidence/runs/`. This README doesn't restate them, so it can't drift from the receipts.
 
 ## Verify it yourself
 
 ```bash
+# From the repo root.
 # Host tests, including fixture integrity (pinned hashes of the verifier and baseline)
-cd web && pnpm test
+(cd web && pnpm test)
 
 # Re-run the frozen verifier against any handler in a fresh CreateOS VM
 # (needs CREATEOS_SANDBOX_API_KEY in the environment)
-set -a; . .env; set +a
-node web/scripts/reverify.mjs <handler.mjs>
+set -a; . ./.env; set +a
+node web/scripts/reverify.mjs <handler.mjs>          # or a RUNVA patch.diff
+node web/scripts/reverify.mjs <handler.mjs> --expect-sha256 <hex>   # also pin the handler hash from a receipt
 ```
 
-Point `reverify.mjs` at the final handler from a receipt or from `GET /api/runs/:id/patch`, and you get an independent verdict that never touches the LLM. Point it at `web/fixtures/webhook-idempotency/handler.vulnerable.mjs` to reproduce the baseline failure (V1 and V2 should fail).
+Point `reverify.mjs` at the final handler (or the `.diff` from `GET /api/runs/:id/patch`) to get an independent verdict that never touches the LLM, RUNVA's server or its UI. Exit codes: `0` PASS (V1–V6 pass, verifier exit 0), `1` FAIL, `2` usage error or hash mismatch, `3` infra error. Point it at `web/fixtures/webhook-idempotency/handler.vulnerable.mjs` to reproduce the baseline failure (V1 and V2 should fail).
 
 ## API
 
@@ -145,6 +147,7 @@ Point `reverify.mjs` at the final handler from a receipt or from `GET /api/runs/
 | `GET /api/runs/:id/events?after=<seq>` | `{ events, status, finished }` | Ordered timeline; reconnect with the last `seq`. |
 | `POST /api/runs/:id/cancel` | `{ cancelled }` | Aborts the run; VMs are still destroyed. |
 | `GET /api/runs/:id/report` | `text/markdown` download | The proof receipt. |
+| `GET /api/runs/:id/receipt.json` | JSON download | Machine-readable receipt (schema `runva.receipt.v1`). |
 | `GET /api/runs/:id/patch` | `text/x-diff` download | Unified diff plus the complete final `handler.mjs`. |
 | `GET /api/health` | `{ ok, sandboxConfigured, llmConfigured, model, activeRunId }` | Readiness only. Never returns keys or account data. |
 
