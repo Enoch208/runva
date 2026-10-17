@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Design system: Morrow theme (packages/ui/src/theme.css), copied verbatim. */
+/* RUNVA design system: neutral canvas, red accent, Geist + Manrope. */
 @theme {
   --color-neutral-50: #fafafa;
   --color-neutral-100: #f5f5f5;

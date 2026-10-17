@@ -43,7 +43,7 @@ function FingerprintCard({
   );
 }
 
-/** Morrow write-surface style: every artifact's sha256 with real consistency checks. */
+/** Fingerprints: every artifact's sha256 with real consistency checks. */
 export function FingerprintsPanel({ summary }: { summary: RunSummary }) {
   const base = summary.baselineResult;
   const final = summary.finalResult;

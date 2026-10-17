@@ -117,7 +117,7 @@ export function VerdictPanel({ summary, updatedAt }: { summary: RunSummary; upda
   );
 }
 
-/** Morrow hero-figures strip for run facts. */
+/** Figures strip for run facts. */
 export function RunFigures({ summary, elapsed }: { summary: RunSummary; elapsed: string }) {
   const attempts = summary.attemptCount ?? summary.attempts?.length ?? 0;
   const cells = [

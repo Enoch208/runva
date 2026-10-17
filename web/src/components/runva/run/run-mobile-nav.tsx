@@ -18,7 +18,7 @@ function barClass(st: StepState, stopDot: string): string {
   }
 }
 
-/** Mobile (< lg) phase stepper + section pills, sticky like Morrow's dashboard mobile nav. */
+/** Mobile (< lg) phase stepper + section pills, sticky. */
 export function RunMobileNav({ summary }: { summary: RunSummary }) {
   const states = computeSteps(summary);
   const tone = TONE_STYLES[toneFor(summary.status)];

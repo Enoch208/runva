@@ -75,10 +75,10 @@ export function HeroShowcase() {
         className="animate-on-scroll [animation:fadeInUp_0.8s_ease-out_0.5s_both] relative lg:col-span-8 md:h-[540px] group overflow-hidden rounded-3xl border border-white/5 bg-[#080808] animate hover:border-white/10 transition-all scroll-mt-32"
       >
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_70%_60%_at_80%_10%,rgba(204,0,0,0.10),transparent_70%)]" />
-        <div className="relative p-6 md:absolute md:right-8 md:top-8 md:w-[52%] md:p-0 transition-transform duration-700 group-hover:scale-[1.02]">
+        <div className="hidden md:block bg-gradient-to-t from-black via-black/20 to-transparent absolute top-0 right-0 bottom-0 left-0 pointer-events-none" />
+        <div className="relative z-10 p-6 md:absolute md:right-8 md:top-8 md:w-[52%] md:p-0 transition-transform duration-700 group-hover:scale-[1.02]">
           <FlowScreen />
         </div>
-        <div className="hidden md:block bg-gradient-to-t from-black via-black/20 to-transparent absolute top-0 right-0 bottom-0 left-0 pointer-events-none" />
 
         <div className="relative p-6 md:absolute md:bottom-0 md:left-0 md:p-8 w-full md:w-[48%]">
           <div className="flex items-center gap-2 text-red-500 mb-2">
@@ -107,7 +107,7 @@ export function HeroShowcase() {
       <div className="animate-on-scroll [animation:fadeInUp_0.8s_ease-out_0.6s_both] lg:col-span-4 flex flex-col md:flex-row lg:flex-col z-10 animate gap-x-6 gap-y-6">
         <ShowcaseCard
           backdrop={
-            <pre className="p-6 font-mono text-[11px] leading-relaxed text-neutral-300 whitespace-pre">{VERIFIER_CASES}</pre>
+            <pre className="pl-20 pt-6 pr-6 font-mono text-[11px] leading-relaxed text-neutral-300 whitespace-pre">{VERIFIER_CASES}</pre>
           }
           icon={SecurityCheckIcon}
           title="Frozen verifier"
@@ -116,7 +116,7 @@ export function HeroShowcase() {
         />
         <ShowcaseCard
           backdrop={
-            <pre className="p-6 font-mono text-[11px] leading-relaxed text-neutral-300 whitespace-pre">{SYNTHETIC_EVENT}</pre>
+            <pre className="pl-20 pt-6 pr-6 font-mono text-[11px] leading-relaxed text-neutral-300 whitespace-pre">{SYNTHETIC_EVENT}</pre>
           }
           icon={CloudServerIcon}
           title="Real sandbox"

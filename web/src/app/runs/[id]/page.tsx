@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { RunSkeleton, RunView } from "@/components/runva/RunView";
+import { RunLoading, RunView } from "@/components/runva/run/run-view";
 
 export const metadata: Metadata = {
   title: "RUNVA — Verification run",
@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 export default function RunPage({ params }: PageProps<"/runs/[id]">) {
   return (
-    <Suspense fallback={<RunSkeleton />}>
+    <Suspense fallback={<RunLoading />}>
       {params.then(({ id }) => (
         <RunView key={id} runId={id} />
       ))}

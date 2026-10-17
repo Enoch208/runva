@@ -8,7 +8,7 @@ import { CodeBlock, ExitChip, MonoChip, OutputBlock, Panel, PanelTitle, cx } fro
 
 type Tab = "tests" | "diff" | "commands";
 
-/** Generated tests, patch diff and raw sandbox commands behind a Morrow segmented pill. */
+/** Generated tests, patch diff and raw sandbox commands behind a segmented pill. */
 export function ArtifactsPanel({ summary }: { summary: RunSummary }) {
   const [tab, setTab] = useState<Tab>("diff");
   const commands = collectCommands(summary);

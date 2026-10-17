@@ -6,7 +6,7 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
-/** Morrow panel: rounded-2xl, hairline border, #0a0a0a. */
+/** Panel: rounded-2xl, hairline border, #0a0a0a. */
 export function Panel({
   id,
   children,
@@ -108,7 +108,7 @@ export function ExitChip({ code }: { code: number | undefined | null }) {
   );
 }
 
-/** Plain-text code block (React escapes it) in Morrow's black console style. */
+/** Plain-text code block (React escapes it) in the black console style. */
 export function CodeBlock({
   code,
   lineNumbers = true,

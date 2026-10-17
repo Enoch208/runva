@@ -26,7 +26,7 @@ const FRAME: Record<SideTone, string> = {
   pending: "border-white/5 border-dashed",
 };
 
-/** Signature BEFORE / AFTER panel, Morrow "same bytes, two verdicts" treatment. */
+/** Signature BEFORE / AFTER panel: same verifier, two handlers. */
 export function EvidencePanel({ summary }: { summary: RunSummary }) {
   const before = sideEvidence(summary.baselineResult);
   const latest = latestVerifiedAttempt(summary);

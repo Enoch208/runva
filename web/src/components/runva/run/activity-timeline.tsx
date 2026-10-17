@@ -25,7 +25,7 @@ const KIND_LABEL: Record<EventKind, string> = {
 };
 const OUTPUT_KEYS = ["stdout", "stderr", "output", "log", "tail"];
 
-/** Execution timeline in Morrow's claim-timeline / activity treatment. Auto-follows while live. */
+/** Execution timeline as a dotted timeline. Auto-follows while live. */
 export function ActivityTimeline({ events, startedAt, live }: { events: RunEvent[]; startedAt: string; live: boolean }) {
   const list = sortedEvents(events);
   const scroller = useRef<HTMLDivElement>(null);

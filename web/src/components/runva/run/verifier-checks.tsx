@@ -49,7 +49,7 @@ function ResultLine({ label, c, verified }: { label: string; c: VerdictCase | un
   );
 }
 
-/** V1–V6 frozen verifier cases, Morrow safety-checks card grid. */
+/** V1–V6 frozen verifier cases as a card grid. */
 export function VerifierChecks({ summary }: { summary: RunSummary }) {
   const base = summary.baselineResult?.verdict?.cases ?? [];
   const finalCases = summary.finalResult?.verdict?.cases ?? (summary.caseResults?.length ? summary.caseResults : []);

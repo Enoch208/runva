@@ -11,7 +11,7 @@ import type {
   VerdictCase,
   VerifierResult,
 } from "@/lib/runva/types";
-import { RunDashboard } from "@/components/runva/RunDashboard";
+import { RunDashboard } from "@/components/runva/run/run-dashboard";
 
 const T0 = Date.parse("2026-10-17T14:00:00.000Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -282,7 +282,7 @@ export function PreviewClient() {
       preview
       connection={["VERIFIED", "FAILED", "INCONCLUSIVE", "CANCELLED", "INFRA_ERROR"].includes(summary.status) ? "done" : "live"}
       topSlot={
-        <div className="sticky top-0 z-40 flex flex-wrap items-center justify-center gap-2 border-b border-warn/40 bg-amber-950/90 px-4 py-2 font-mono text-[11px] text-amber-100">
+        <div className="flex w-full max-w-[1500px] flex-wrap items-center justify-center gap-2 rounded-full border border-amber-300/30 bg-amber-950/60 px-4 py-2 font-mono text-[11px] text-amber-100">
           <strong className="tracking-[0.2em]">SAMPLE DATA — dev preview</strong>
           <span className="text-amber-200/70">not a real run ·</span>
           {Object.keys(SAMPLES).map((k) => (

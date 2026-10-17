@@ -4,7 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
 
 interface ShowcaseCardProps {
-  /** Decorative backdrop rendered where Morrow places its cover photo. */
+  /** Decorative backdrop behind the card content. */
   backdrop: ReactNode;
   icon: IconSvgElement;
   title: string;
