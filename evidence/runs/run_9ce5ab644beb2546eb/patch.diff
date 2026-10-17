@@ -1,0 +1,105 @@
+# RUNVA patch — run run_9ce5ab644beb2546eb — status VERIFIED — attempt 1 — sha256 f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00
+# Verified for these synthetic conditions in this sandbox. Not a production guarantee.
+
+===================================================================
+--- a/handler.mjs	baseline
++++ b/handler.mjs	candidate 1
+@@ -1,21 +1,43 @@
+ // Payment webhook handler: fulfills an order when its payment succeeds.
++// Idempotency is at the ORDER level (business effect), not just the event id.
+ 
+-// Stripe redelivers webhooks, so remember which events we've already handled.
+-const processedEvents = new Set();
++// Orders whose fulfillment has succeeded.
++const completedOrders = new Set();
++// Orders currently being fulfilled: orderId -> shared in-flight promise.
++const inFlight = new Map();
+ 
+ export async function handleWebhook(event, deps) {
+   if (event.type !== "payment_intent.succeeded") {
+     return { ok: true, action: "ignored" };
+   }
+ 
+-  if (processedEvents.has(event.id)) {
++  const orderId = event.data.object.metadata.order_id;
++
++  if (completedOrders.has(orderId)) {
+     return { ok: true, action: "duplicate" };
+   }
+ 
+-  const orderId = event.data.object.metadata.order_id;
+-  await deps.fulfillOrder(orderId);
++  const pending = inFlight.get(orderId);
++  if (pending) {
++    // Another delivery is fulfilling this order. Wait for its outcome; if it
++    // failed, this rejects too (no fake acknowledgement) and the sender retries.
++    await pending;
++    return { ok: true, action: "duplicate" };
++  }
+ 
+-  // Only mark the event handled after fulfillment succeeds, so a failed attempt can be retried.
+-  processedEvents.add(event.id);
++  // Register the in-flight work synchronously (before any await) so that
++  // overlapping deliveries cannot both reach fulfillOrder.
++  const work = Promise.resolve()
++    .then(() => deps.fulfillOrder(orderId))
++    .then(() => {
++      // Only record completion after fulfillment succeeded.
++      completedOrders.add(orderId);
++    })
++    .finally(() => {
++      inFlight.delete(orderId);
++    });
++  inFlight.set(orderId, work);
++
++  await work;
+   return { ok: true, action: "fulfilled" };
+ }
+
+# ---------------------------------------------------------------------------
+# Final handler.mjs (complete source)
+# ---------------------------------------------------------------------------
+# // Payment webhook handler: fulfills an order when its payment succeeds.
+# // Idempotency is at the ORDER level (business effect), not just the event id.
+# 
+# // Orders whose fulfillment has succeeded.
+# const completedOrders = new Set();
+# // Orders currently being fulfilled: orderId -> shared in-flight promise.
+# const inFlight = new Map();
+# 
+# export async function handleWebhook(event, deps) {
+#   if (event.type !== "payment_intent.succeeded") {
+#     return { ok: true, action: "ignored" };
+#   }
+# 
+#   const orderId = event.data.object.metadata.order_id;
+# 
+#   if (completedOrders.has(orderId)) {
+#     return { ok: true, action: "duplicate" };
+#   }
+# 
+#   const pending = inFlight.get(orderId);
+#   if (pending) {
+#     // Another delivery is fulfilling this order. Wait for its outcome; if it
+#     // failed, this rejects too (no fake acknowledgement) and the sender retries.
+#     await pending;
+#     return { ok: true, action: "duplicate" };
+#   }
+# 
+#   // Register the in-flight work synchronously (before any await) so that
+#   // overlapping deliveries cannot both reach fulfillOrder.
+#   const work = Promise.resolve()
+#     .then(() => deps.fulfillOrder(orderId))
+#     .then(() => {
+#       // Only record completion after fulfillment succeeded.
+#       completedOrders.add(orderId);
+#     })
+#     .finally(() => {
+#       inFlight.delete(orderId);
+#     });
+#   inFlight.set(orderId, work);
+# 
+#   await work;
+#   return { ok: true, action: "fulfilled" };
+# }
+# 

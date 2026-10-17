@@ -1,0 +1,122 @@
+config: sandboxKey=CREATEOS_SANDBOX_API_KEY baseUrl=https://api-eu.sb.createos.sh shape=s-1vcpu-1gb egress=registry.npmjs.org:443 llm=openrouter:anthropic/claude-sonnet-5.5 freshVerifierVm=true
+
+######## RUN 1/1 ########
+   0.3s #  1 [CREATED] phase     Run created
+   0.3s #  2 [INSPECTING] phase     Inspecting target and freezing the independent verifier
+   0.3s #  3 [INSPECTING] artifact  Baseline handler.mjs loaded
+   0.3s #  4 [INSPECTING] artifact  Frozen verifier hashed (agent cannot see or edit it)
+   0.3s #  5 [INSPECTING] llm       Asking anthropic/claude-sonnet-5.5 to write adversarial tests
+  46.0s #  6 [TESTS_GENERATED] phase     Agent wrote adversarial tests  (latencyMs=45796)
+  46.0s #  7 [TESTS_GENERATED] sandbox   Creating CreateOS sandbox
+  46.7s #  8 [TESTS_GENERATED] sandbox   Sandbox sb-01m55yy… running (created in 669ms)  (createMs=669 sandboxId="sb-01m55yy…")
+  47.5s #  9 [TESTS_GENERATED] artifact  Uploaded baseline handler, agent tests and frozen verifier to the sandbox  (sandboxId="sb-01m55yy…")
+  47.7s # 10 [TESTS_GENERATED] command   Egress blocked: example.com unreachable from sandbox (curl exit 35)  (exitCode=35 execMs=58.397 sandboxId="sb-01m55yy…")
+  47.7s # 11 [BASELINE_RUNNING] phase     Running the vulnerable baseline in the sandbox
+  48.0s # 12 [BASELINE_RUNNING] command   Baseline syntax check: exit 0  (exitCode=0 execMs=80.166 sandboxId="sb-01m55yy…")
+  48.7s # 13 [BASELINE_RUNNING] command   Agent tests vs baseline: exit 1 (failures exposed)  (exitCode=1 execMs=402.068 sandboxId="sb-01m55yy…")
+  49.2s # 14 [BASELINE_RUNNING] command   baseline: frozen verifier: exit 1 — 4/6 cases pass  (exitCode=1 execMs=425.49 sandboxId="sb-01m55yy…" failing=["V1","V2"])
+  49.2s # 15 [BASELINE_RUNNING] assertion V1 FAIL — Same event delivered 20 times concurrently fulfills the order once
+  49.2s # 16 [BASELINE_RUNNING] assertion V2 FAIL — Different event IDs for the same payment/order fulfill it once
+  49.2s # 17 [BASELINE_RUNNING] assertion V3 PASS — Unknown event types are acknowledged and ignored
+  49.2s # 18 [BASELINE_RUNNING] assertion V4 PASS — Two different orders are each fulfilled exactly once
+  49.2s # 19 [BASELINE_RUNNING] assertion V5 PASS — Failed fulfillment is not marked complete; retry fulfills exactly once
+  49.2s # 20 [BASELINE_RUNNING] assertion V6 PASS — Module exports handleWebhook and fulfills a valid event
+  49.2s # 21 [FAILURE_REPRODUCED] phase     Failure reproduced: V1, V2 fail on baseline  (exitCode=1 failing=["V1","V2"])
+  49.2s # 22 [PATCH_GENERATING] phase     Asking the model for a minimal patch, conditioned on the real failures  (attempt=1)
+  49.2s # 23 [PATCH_GENERATING] llm       Asking anthropic/claude-sonnet-5.5 for patch candidate 1  (attempt=1)
+  61.3s # 24 [PATCH_GENERATING] artifact  Candidate 1: handler.mjs (+29 −7 lines)  (latencyMs=11909 attempt=1)
+  61.3s # 25 [PATCH_TESTING] phase     Testing candidate 1 in sandbox sb-01m55yy…  (attempt=1)
+  61.8s # 26 [PATCH_TESTING] command   Candidate 1 syntax check: exit 0  (exitCode=0 execMs=18.911 sandboxId="sb-01m55yy…" attempt=1)
+  62.5s # 27 [PATCH_TESTING] command   Agent tests vs candidate 1: exit 0  (exitCode=0 execMs=388.568 sandboxId="sb-01m55yy…" attempt=1)
+  63.0s # 28 [PATCH_TESTING] command   attempt 1: frozen verifier: exit 0 — 6/6 cases pass  (exitCode=0 execMs=322.67 sandboxId="sb-01m55yy…" failing=[])
+  63.0s # 29 [PATCH_TESTING] assertion V1 PASS — Same event delivered 20 times concurrently fulfills the order once
+  63.0s # 30 [PATCH_TESTING] assertion V2 PASS — Different event IDs for the same payment/order fulfill it once
+  63.0s # 31 [PATCH_TESTING] assertion V3 PASS — Unknown event types are acknowledged and ignored
+  63.0s # 32 [PATCH_TESTING] assertion V4 PASS — Two different orders are each fulfilled exactly once
+  63.0s # 33 [PATCH_TESTING] assertion V5 PASS — Failed fulfillment is not marked complete; retry fulfills exactly once
+  63.0s # 34 [PATCH_TESTING] assertion V6 PASS — Module exports handleWebhook and fulfills a valid event
+  63.0s # 35 [PATCH_TESTING] assertion Candidate 1 passes all frozen verifier cases in the work VM  (exitCode=0 attempt=1)
+  63.0s # 36 [INDEPENDENT_VERIFYING] phase     Independent verification: fresh VM with only the final handler + frozen verifier  (attempt=1)
+  63.3s # 37 [INDEPENDENT_VERIFYING] sandbox   Sandbox sb-01m55yy… destroyed  (sandboxId="sb-01m55yy…")
+  63.3s # 38 [INDEPENDENT_VERIFYING] sandbox   Creating a FRESH CreateOS sandbox for independent verification
+  63.8s # 39 [INDEPENDENT_VERIFYING] sandbox   Sandbox sb-01m55yy… running (created in 577ms)  (createMs=577 sandboxId="sb-01m55yy…")
+  64.5s # 40 [INDEPENDENT_VERIFYING] artifact  Uploaded final handler + frozen verifier  (sandboxId="sb-01m55yy…")
+  64.8s # 41 [INDEPENDENT_VERIFYING] assertion Verifier integrity: in-VM sha256 matches the frozen hash  (sandboxId="sb-01m55yy…")
+  66.5s # 42 [INDEPENDENT_VERIFYING] command   final: independent verifier: exit 0 — 6/6 cases pass  (exitCode=0 execMs=1418.466 sandboxId="sb-01m55yy…" failing=[])
+  66.5s # 43 [INDEPENDENT_VERIFYING] assertion V1 PASS — Same event delivered 20 times concurrently fulfills the order once
+  66.5s # 44 [INDEPENDENT_VERIFYING] assertion V2 PASS — Different event IDs for the same payment/order fulfill it once
+  66.5s # 45 [INDEPENDENT_VERIFYING] assertion V3 PASS — Unknown event types are acknowledged and ignored
+  66.5s # 46 [INDEPENDENT_VERIFYING] assertion V4 PASS — Two different orders are each fulfilled exactly once
+  66.5s # 47 [INDEPENDENT_VERIFYING] assertion V5 PASS — Failed fulfillment is not marked complete; retry fulfills exactly once
+  66.5s # 48 [INDEPENDENT_VERIFYING] assertion V6 PASS — Module exports handleWebhook and fulfills a valid event
+  66.5s # 49 [INDEPENDENT_VERIFYING] sandbox   Sandbox sb-01m55yy… destroyed  (sandboxId="sb-01m55yy…")
+  66.5s # 50 [VERIFIED] phase     VERIFIED — candidate 1 passes V1–V6 in a fresh CreateOS sandbox (exit 0)
+
+================ SUMMARY ================
+{
+  "runId": "run_9ce5ab644beb2546eb",
+  "status": "VERIFIED",
+  "durationMs": 66533,
+  "model": "openrouter:anthropic/claude-sonnet-5.5",
+  "credentialSource": "CREATEOS_SANDBOX_API_KEY",
+  "sandboxes": [
+    {
+      "id": "sb-01m55yy…",
+      "purpose": "work",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 669,
+      "destroyed": true,
+      "destroyMs": 204
+    },
+    {
+      "id": "sb-01m55yy…",
+      "purpose": "fresh-verifier",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 577,
+      "destroyed": true,
+      "destroyMs": 200
+    }
+  ],
+  "egressBlocked": true,
+  "baselineVerifier": {
+    "exit": 1,
+    "failing": [
+      "V1",
+      "V2"
+    ]
+  },
+  "baselineAgentTestsExit": 1,
+  "attempts": [
+    {
+      "attempt": 1,
+      "syntax": 0,
+      "agentTests": 0,
+      "verifierExit": 0,
+      "failing": [],
+      "changeSummary": "Idempotency is now keyed on the order ID. A module-level Set holds orders whose fulfillment succeeded. A Map holds one in-flight fulfillment promise per order, "
+    }
+  ],
+  "final": {
+    "exit": 0,
+    "pass": true,
+    "cases": [
+      "V1:PASS",
+      "V2:PASS",
+      "V3:PASS",
+      "V4:PASS",
+      "V5:PASS",
+      "V6:PASS"
+    ]
+  },
+  "verifierIntegrity": {
+    "expectedSha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "observedSha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "match": true
+  }
+}
+evidence saved: /Users/enoch/Projects/createos-hackathon/evidence/runs/run_9ce5ab644beb2546eb
+METRICS {"runId":"run_9ce5ab644beb2546eb","status":"VERIFIED","attempts":1,"durationMs":66533,"vmCreateMs":"work:669 fresh-verifier:577","baselineV1Fulfillments":20,"finalV1Fulfillments":1,"egressBlocked":true,"verifierIntegrityMatch":true,"allVmsDestroyed":true}
+cleanup check: 1 non-destroyed sandbox(es) on account; 0 RUNVA-named: []
+cleanup check: all statuses seen: ["sb-01m55yy:destroyed","sb-01m55yy:destroyed","sb-01m55yw:destroyed","sb-01m55yp:destroyed","sb-01m55yc:running"]

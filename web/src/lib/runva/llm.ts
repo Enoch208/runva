@@ -124,6 +124,7 @@ function testsPrompt(fx: Fixture): string {
     "- Probe: the same event delivered many times including concurrently; two different event ids for the same order; an unknown event type; two different orders; fulfillOrder failing once then the event being retried.",
     "- Catch errors per test so one failure does not hide the others. Print one line per test: `PASS <name>` or `FAIL <name>: <observed vs expected>`, then a summary line.",
     "- Set process.exitCode = 1 if any test fails, else 0. Finish well within 20 seconds; leave no timers or handles open.",
+    "- Keep it focused and compact: about 5–7 tests, under ~150 lines total, no comments beyond a one-line header.",
     "- These tests run against the CURRENT (possibly vulnerable) handler first; failing tests there are expected and useful. Do not assume any particular fix.",
     "",
     'Respond with JSON exactly of the form: {"summary": "what failure these tests try to expose", "testFilename": "agent-tests.mjs", "testCode": "<complete module source>"}',

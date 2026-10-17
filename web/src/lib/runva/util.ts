@@ -14,7 +14,8 @@ export function tail(s: string | undefined | null, max = 4096): string {
 /** Shorten a sandbox id for display, e.g. "sb-3f9a12…". */
 export function shortId(id: string | undefined | null): string {
   if (!id) return "unknown";
-  return id.length > 12 ? `${id.slice(0, 10)}…` : id;
+  // ULID-style ids share a timestamp prefix, so keep the head AND the tail to stay distinguishable.
+  return id.length > 14 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
 }
 
 export function newRunId(): string {

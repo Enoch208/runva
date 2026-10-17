@@ -111,23 +111,33 @@ export class SandboxSession {
     this.purpose = purpose;
   }
 
-  static async create(runId: string, purpose: SandboxPurpose, signal?: AbortSignal): Promise<SandboxSession> {
+  static async create(runId: string, purpose: SandboxPurpose, signal?: AbortSignal, onRetry?: (reason: string) => void): Promise<SandboxSession> {
     const env = sandboxEnv();
     const client = getSandboxClient();
     const t0 = Date.now();
     const name = `runva-${runId.replace(/^run_/, "").slice(0, 10)}-${purpose === "work" ? "w" : "v"}`;
+    const req = {
+      shape: env.shape,
+      rootfs: env.rootfs,
+      ingress_enabled: false,
+      // NON-EMPTY allowlist = restrictive. [] would mean allow-all on CreateOS.
+      egress: env.egress,
+      name,
+    };
     try {
-      const sb = await client.createSandbox(
-        {
-          shape: env.shape,
-          rootfs: env.rootfs,
-          ingress_enabled: false,
-          // NON-EMPTY allowlist = restrictive. [] would mean allow-all on CreateOS.
-          egress: env.egress,
-          name,
-        },
-        { timeoutMs: runEnv().sandboxCreateTimeoutMs, signal, retry: false },
-      );
+      let sb: Sandbox;
+      try {
+        sb = await client.createSandbox(req, { timeoutMs: runEnv().sandboxCreateTimeoutMs, signal, retry: false });
+      } catch (e) {
+        // Free tier = one VM at a time. On a quota/rate-limit rejection wait 20s and retry exactly once.
+        if (!(e instanceof CreateosSandboxPermissionError || e instanceof CreateosSandboxRateLimitError) || signal?.aborted) throw e;
+        onRetry?.(e instanceof CreateosSandboxRateLimitError ? "rate-limited (429)" : "quota/permission (403)");
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 20_000);
+          signal?.addEventListener("abort", () => (clearTimeout(t), reject(signal.reason)), { once: true });
+        });
+        sb = await client.createSandbox(req, { timeoutMs: runEnv().sandboxCreateTimeoutMs, signal, retry: false });
+      }
       return new SandboxSession(sb, purpose, Date.now() - t0);
     } catch (e) {
       // The control plane may still finish creating the VM after we gave up (timeout/cancel):

@@ -151,7 +151,9 @@ async function createVm(S: RunSummary, purpose: "work" | "fresh-verifier", signa
     ingressEnabled: false,
     credentialSource: env.apiKeySource,
   });
-  const vm = await SandboxSession.create(S.runId, purpose, signal);
+  const vm = await SandboxSession.create(S.runId, purpose, signal, (reason) =>
+    emit(S, "sandbox", `CreateOS rejected create: ${reason} — waiting 20s and retrying once`, { purpose, reason }),
+  );
   S.sandboxes!.push({ id: vm.shortId, purpose, shape: vm.shape, region: vm.region, createMs: vm.createMs, destroyed: false });
   if (purpose === "work" || !S.sandbox) S.sandbox = { id: vm.shortId, shape: vm.shape, region: vm.region, egress: vm.egress };
   emit(S, "sandbox", `Sandbox ${vm.shortId} running (created in ${vm.createMs}ms)`, {
