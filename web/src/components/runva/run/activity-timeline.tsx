@@ -61,7 +61,7 @@ export function ActivityTimeline({ events, startedAt, live }: { events: RunEvent
         className="max-h-[620px] overflow-y-auto no-scrollbar"
       >
         {count === 0 ? (
-          <p className="text-xs text-neutral-400">Waiting for the first server event…</p>
+          <p className="text-xs text-neutral-400">{live ? "Waiting for the first server event…" : "No events recorded in this run."}</p>
         ) : (
           <ol className="relative flex flex-col gap-4 pl-5">
             <div className="absolute left-[3px] top-2 bottom-2 w-px bg-white/10" />

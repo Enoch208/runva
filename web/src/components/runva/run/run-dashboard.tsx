@@ -7,6 +7,7 @@ import { elapsedMs, formatDuration, isTerminal } from "../run-model";
 import { ActivityTimeline } from "./activity-timeline";
 import { ArtifactsPanel } from "./artifacts-panel";
 import { EvidencePanel } from "./evidence-panel";
+import { ExecutionProofPanel } from "./execution-proof";
 import { FingerprintsPanel } from "./fingerprints-panel";
 import { PageHeading } from "./page-heading";
 import { StatusChip } from "./primitives";
@@ -85,6 +86,7 @@ export function RunDashboard({
             <EvidencePanel summary={summary} />
             <RunFigures summary={summary} elapsed={formatDuration(elapsedMs(summary, now))} />
           </div>
+          <ExecutionProofPanel summary={summary} />
           <VerifierChecks summary={summary} />
           <div className="grid grid-cols-1 gap-10 2xl:grid-cols-5">
             <div className="min-w-0 2xl:col-span-2">

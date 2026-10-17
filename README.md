@@ -15,9 +15,13 @@ RUNVA doesn't ask you to trust an AI patch. It:
 
 A run is only marked **VERIFIED** when the unmodified verifier passes in a real CreateOS execution. Runs that fail, can't be reproduced, or hit an infrastructure error are labeled honestly as FAILED, INCONCLUSIVE or INFRA_ERROR.
 
+**Contents:** [Golden scenario](#the-golden-scenario-duplicate-fulfillment) · [One run](#one-run-end-to-end) · [Architecture](#architecture) · [Design decisions](#why-this-is-hard--design-decisions) · [Sponsor integration](#sponsor-integration) · [Evidence](#evidence) · [Verify it yourself](#verify-it-yourself) · [API](#api) · [Run it locally](#run-it-locally) · [Scope of proof](#scope-of-proof)
+
 ## The golden scenario: duplicate fulfillment
 
 `handler.mjs` exports `handleWebhook(event, deps)`. The seeded baseline *looks* idempotent: it dedupes on `event.id`. But the check happens before an `await` and is keyed on the wrong thing, so it fails under concurrency and under different event IDs for the same order.
+
+**Contract** ([`invariant.md`](web/fixtures/webhook-idempotency/invariant.md)): one paid order leads to exactly one fulfillment, even when a webhook is delivered more than once, concurrently, or under a different event ID.
 
 | Case | Replay scenario | Contract |
 |---|---|---|
@@ -31,6 +35,46 @@ A run is only marked **VERIFIED** when the unmodified verifier passes in a real 
 Observed baseline (frozen verifier, real execution): **V1 fails with 20 fulfillments from 20 deliveries**, and V2 fails. V3–V6 pass.
 
 The verifier runs each case in an isolated `worker_thread` with a fresh module import. It counts side effects in its own closure, never from the handler's return value. It routes handler output to stderr so a patch can't forge the verdict line, and it treats unhandled rejections and timeouts as failures.
+
+## One run, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant H as RUNVA host (Node)
+    participant L as LLM (OpenRouter)
+    participant V1 as CreateOS VM 1 (work)
+    participant V2 as CreateOS VM 2 (fresh verifier)
+
+    B->>H: POST /api/runs
+    H-->>B: runId (UI polls /api/runs/:id/events)
+    H->>H: load fixture, SHA-256 the handler and frozen verifier
+    H->>L: generateTests (contract + handler, never the verifier)
+    L-->>H: agent-tests.mjs (zod-validated JSON)
+    H->>V1: createSandbox (ingress off, egress allowlist)
+    H->>V1: upload handler.mjs, agent-tests.mjs, verification.mjs
+    H->>V1: curl a non-allowlisted host
+    V1-->>H: non-zero exit = egress blocked
+    H->>V1: node --check, node agent-tests.mjs, node verification.mjs
+    V1-->>H: stdout, stderr, exit code (baseline fails V1, V2)
+    loop at most 3 candidates (1 patch + 2 repairs), until the verifier passes
+        H->>L: generatePatch / repairPatch with the real failure output
+        L-->>H: candidate handler.mjs + diagnosis
+        H->>V1: upload candidate + re-upload verifier, run checks
+        V1-->>H: stdout, stderr, exit code
+    end
+    H->>V1: destroy
+    H->>V2: createSandbox (new VM)
+    H->>V2: upload final handler.mjs + frozen verification.mjs only
+    H->>V2: sha256sum verification.mjs
+    H->>V2: node verification.mjs
+    V2-->>H: runva.verdict.v1 JSON + exit code
+    H->>V2: destroy (in finally)
+    H->>H: host code sets VERIFIED / FAILED / INCONCLUSIVE / INFRA_ERROR
+    B->>H: GET /api/runs/:id/report
+    H-->>B: Markdown receipt
+```
 
 ## Architecture
 
@@ -52,11 +96,57 @@ CreateOS Firecracker VM (EU, ephemeral, ingress off, egress allowlist)
 
 **Execution boundary:** model-generated code never runs on the host. There's no `eval`, `vm`, `child_process` or local import of candidate code. The host only hashes, diffs, and parses JSON.
 
+Key files: [`orchestrator.ts`](web/src/lib/runva/orchestrator.ts) (state machine), [`sandbox.ts`](web/src/lib/runva/sandbox.ts) (CreateOS SDK), [`llm.ts`](web/src/lib/runva/llm.ts), [`verifier.ts`](web/src/lib/runva/verifier.ts) (host-side verdict parsing), [`receipt.ts`](web/src/lib/runva/receipt.ts), [`types.ts`](web/src/lib/runva/types.ts) (shared contract), [`fixtures/webhook-idempotency/`](web/fixtures/webhook-idempotency/).
+
+## Why this is hard / design decisions
+
+**The LLM never decides pass/fail.** A model grading its own patch gives you a confidence score, not evidence. The model writes tests and patches, and its diagnosis is shown as a claim. `VERIFIED` is computed by host code from the frozen verifier's exit code, its parsed `runva.verdict.v1` JSON, and the in-VM verifier hash. The model's own tests count as evidence that the bug was reproduced. They don't gate the verdict, because a model can write weak tests that its own patch passes.
+
+**The verifier is frozen, hash-pinned, and runs each case in a worker.** If the patching model could see or edit the judge, it could optimize for the judge instead of the contract. So the verifier lives in the host repo and is never sent to the model. It's re-uploaded before every candidate run, so a candidate can't overwrite it in between, and its SHA-256 is pinned on the host and measured again inside the final VM. Each case runs in its own `worker_thread`, which gives three guarantees: module-level state from one case (a dedupe `Set`, say) can't leak into the next and make it pass by accident; a synchronous busy-loop gets hard-killed instead of hanging the run; and fulfillments are counted in a closure the handler can't reach.
+
+**The final verdict uses a fresh VM.** By the end of the repair loop, the work VM has run model-written tests and up to three candidates. Anything they left behind (stray files, background work, a modified `verification.mjs`) could affect a re-run in the same VM. The final VM holds only the final handler and the frozen verifier, so nothing the model's code touched is in the room. The work VM is destroyed first, and every VM is destroyed in `finally` on success, failure, timeout and cancel. If a create call times out, RUNVA cleans up the orphan by its unique run-scoped name.
+
+**Egress is an allowlist, not an empty list.** On CreateOS, `egress: []` means *allow all*, not deny all. RUNVA always passes a non-empty allowlist (default `registry.npmjs.org:443`; an empty value or `*` in `RUNVA_SANDBOX_EGRESS` falls back to that default), with ingress disabled. The handler only uses Node built-ins, so it needs no network. Every run then proves the restriction from inside the VM with a `curl` to a non-allowlisted host (`example.com`) and records the exit code in the receipt.
+
+**Bounded and honest by construction.** One active run globally, at most 3 candidates, a run timeout, and cancel. When the loop doesn't converge, the run ends as `FAILED` with the real outputs attached, not as a softened success. When the baseline doesn't fail, the run is `INCONCLUSIVE`, because there's nothing to repair.
+
 ## Sponsor integration
 
-- **CreateOS Sandbox** (`@nodeops-createos/sandbox`): every test, baseline and patch run happens in a real Firecracker microVM. A work VM handles baseline and repair, then a **fresh VM** runs the final independent verification. Egress is restricted to an allowlist; each run proves it by attempting an outbound request to a non-allowlisted host from inside the VM. VMs are destroyed in `finally` on success, failure, timeout and cancel.
+- **CreateOS Sandbox** (`@nodeops-createos/sandbox`): every test, baseline and patch run happens in a real Firecracker microVM. A work VM handles baseline and repair, then a **fresh VM** runs the final independent verification. Egress is restricted to an allowlist; each run proves it by attempting an outbound request to a non-allowlisted host from inside the VM. VMs are destroyed in `finally` on success, failure, timeout and cancel. SDK surface used: `createSandbox` (shape, rootfs, `ingress_enabled: false`, `egress`), `files.upload`, buffered `runCommand` (stdout, stderr, `exit_code`, `exec_ms`), `destroy`.
 - **CreateOS hosting**: the RUNVA app itself is deployed on CreateOS.
-- **Stripe Projects**: the repo is a Stripe Projects workspace (`.projects/state.json`) with the CreateOS provider linked and the `createos/free` plan and `createos/project` resources provisioned via `stripe projects`. No live Stripe APIs, payments or customer data are used; events are synthetic.
+- **Stripe Projects**: the repo is a Stripe Projects workspace (`.projects/state.json`) with the CreateOS provider linked and the `createos/free` plan and `createos/project` resources provisioned via `stripe projects`. Run `stripe projects status` to see the linked stack. No live Stripe APIs, payments or customer data are used; events are synthetic.
+
+## Evidence
+
+Real run receipts are committed in [`evidence/runs/`](evidence/runs/). Each one is a Markdown receipt downloaded from `GET /api/runs/:id/report` after a real run. It records the run status, the CreateOS sandboxes used (shortened IDs, shape, region, destroyed or not), the egress check, each command with its exit code and output tail, frozen-verifier results against the baseline and the final candidate, every patch attempt, the code diff, and SHA-256 identifiers.
+
+For actual counts, durations and attempt numbers, see `evidence/runs/`. This README doesn't restate them, so it can't drift from the receipts.
+
+## Verify it yourself
+
+```bash
+# Host tests, including fixture integrity (pinned hashes of the verifier and baseline)
+cd web && pnpm test
+
+# Re-run the frozen verifier against any handler in a fresh CreateOS VM
+# (needs CREATEOS_SANDBOX_API_KEY in the environment)
+set -a; . .env; set +a
+node web/scripts/reverify.mjs <handler.mjs>
+```
+
+Point `reverify.mjs` at the final handler from a receipt or from `GET /api/runs/:id/patch`, and you get an independent verdict that never touches the LLM. Point it at `web/fixtures/webhook-idempotency/handler.vulnerable.mjs` to reproduce the baseline failure (V1 and V2 should fail).
+
+## API
+
+| Endpoint | Returns | Notes |
+|---|---|---|
+| `POST /api/runs` | `201 { runId, status }` | Body `{ scenarioId: "webhook-idempotency", accessCode? }`. `401` bad access code, `409` a run is already active, `429` cooldown. Preset fixture only, no user-supplied code. |
+| `GET /api/runs/:id` | `RunSummary` | Phase, attempts, sandboxes, egress check, verifier results, errors. Shape in [`types.ts`](web/src/lib/runva/types.ts). |
+| `GET /api/runs/:id/events?after=<seq>` | `{ events, status, finished }` | Ordered timeline; reconnect with the last `seq`. |
+| `POST /api/runs/:id/cancel` | `{ cancelled }` | Aborts the run; VMs are still destroyed. |
+| `GET /api/runs/:id/report` | `text/markdown` download | The proof receipt. |
+| `GET /api/runs/:id/patch` | `text/x-diff` download | Unified diff plus the complete final `handler.mjs`. |
+| `GET /api/health` | `{ ok, sandboxConfigured, llmConfigured, model, activeRunId }` | Readiness only. Never returns keys or account data. |
 
 ## Run it locally
 
@@ -69,7 +159,7 @@ node scripts/smoke-sandbox.mjs   # Gate 1: real VM hello-world, nonzero exit, eg
 pnpm dev                         # http://localhost:3000
 ```
 
-Environment variables (names only; see `.env.example`): `CREATEOS_SANDBOX_API_KEY`, `CREATEOS_SANDBOX_BASE_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `RUNVA_MAX_RUN_MS`, `RUNVA_FRESH_VERIFIER_VM`, `RUNVA_ACCESS_CODE`.
+Environment variables (names only; see `.env.example`): `CREATEOS_SANDBOX_API_KEY`, `CREATEOS_SANDBOX_BASE_URL`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `RUNVA_MAX_RUN_MS`, `RUNVA_FRESH_VERIFIER_VM`, `RUNVA_ACCESS_CODE`. Optional: `RUNVA_SANDBOX_EGRESS`, `RUNVA_SANDBOX_SHAPE`, `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (used when no OpenRouter key is set).
 
 ## Scope of proof
 

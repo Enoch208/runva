@@ -1,7 +1,7 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CancelCircleIcon, CheckmarkCircle02Icon, Clock01Icon } from "@hugeicons/core-free-icons";
 import type { RunSummary, VerdictCase } from "@/lib/runva/types";
-import { formatMs, formatObservation } from "../run-model";
+import { formatMs, formatObservation, isTerminal } from "../run-model";
 import { ExitChip, Panel, PanelTitle, cx } from "./primitives";
 
 const CASE_IDS: VerdictCase["id"][] = ["V1", "V2", "V3", "V4", "V5", "V6"];
@@ -54,6 +54,7 @@ export function VerifierChecks({ summary }: { summary: RunSummary }) {
   const base = summary.baselineResult?.verdict?.cases ?? [];
   const finalCases = summary.finalResult?.verdict?.cases ?? (summary.caseResults?.length ? summary.caseResults : []);
   const verified = summary.status === "VERIFIED";
+  const terminal = isTerminal(summary.status);
   const known = new Set<string>(CASE_IDS);
   const extra = Array.from(new Set([...base, ...finalCases].map((c) => c.id).filter((id) => !known.has(id))));
   const ids = [...CASE_IDS.filter((id) => base.some((c) => c.id === id) || finalCases.some((c) => c.id === id)), ...extra];
@@ -85,9 +86,9 @@ export function VerifierChecks({ summary }: { summary: RunSummary }) {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {CASE_IDS.map((id) => (
             <article key={id} className="flex flex-col gap-4 rounded-2xl border border-dashed border-white/10 bg-[#0a0a0a] p-5">
-              <CheckHeader id={id} title="Awaiting verifier output" state="pending" verified={false} />
+              <CheckHeader id={id} title={terminal ? "Verifier did not run" : "Awaiting verifier output"} state="pending" verified={false} />
               <div className="rounded-lg border border-white/10 px-3 py-2 font-mono text-xs text-neutral-400">
-                Pending · not yet executed
+                {terminal ? "Not produced in this run" : "Pending · not yet executed"}
               </div>
             </article>
           ))}

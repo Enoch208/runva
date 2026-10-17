@@ -7,6 +7,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Download01Icon, Link01Icon, Loading03Icon, RepeatIcon, StopIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import type { RunSummary } from "@/lib/runva/types";
 import { startRun } from "../client-api";
+import { receiptJsonHref } from "../stack";
 import { isTerminal } from "../run-model";
 import { cx, dangerButton, primaryButton, secondaryButton } from "./primitives";
 
@@ -115,6 +116,16 @@ export function RunActions({ summary, preview = false }: { summary: RunSummary; 
         >
           <HugeiconsIcon icon={Download01Icon} size={14} />
           Report .md
+        </a>
+        <a
+          href={terminal ? receiptJsonHref(summary.runId) : undefined}
+          download={terminal ? `runva-receipt-${summary.runId}.json` : undefined}
+          aria-disabled={!terminal}
+          title={terminal ? "Download the machine-readable receipt" : "Available when the run finishes"}
+          className={cx(secondaryButton, !terminal && "pointer-events-none opacity-50")}
+        >
+          <HugeiconsIcon icon={Download01Icon} size={14} />
+          Receipt .json
         </a>
         <a
           href={hasPatch ? patchHref : undefined}

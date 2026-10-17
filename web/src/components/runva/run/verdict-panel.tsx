@@ -5,6 +5,7 @@ import type { RunSummary } from "@/lib/runva/types";
 import { PulseDot } from "../landing/pulse-dot";
 import { STATUS_LABEL, TONE_STYLES, isTerminal, shortHash, shortId, sideEvidence, toneFor } from "../run-model";
 import { cx } from "./primitives";
+import { ProofChips } from "./execution-proof";
 
 function UpdatedAgo({ at }: { at: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -103,6 +104,8 @@ export function VerdictPanel({ summary, updatedAt }: { summary: RunSummary; upda
           </span>
         </div>
       ) : null}
+
+      <ProofChips summary={summary} />
 
       {summary.status !== "VERIFIED" && err?.hint ? (
         <div className={cx("rounded-lg border px-3 py-2 font-mono text-xs", s.border, s.bg, s.text)}>

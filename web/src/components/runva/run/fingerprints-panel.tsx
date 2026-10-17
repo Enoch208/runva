@@ -1,5 +1,5 @@
 import type { RunSummary } from "@/lib/runva/types";
-import { shortHash } from "../run-model";
+import { isTerminal, shortHash } from "../run-model";
 import { Panel, PanelTitle, cx } from "./primitives";
 
 function CheckLine({ passed, children }: { passed: boolean; children: string }) {
@@ -15,7 +15,9 @@ function FingerprintCard({
   meta,
   hash,
   checks,
+  terminal,
 }: {
+  terminal: boolean;
   name: string;
   meta: string;
   hash: string | undefined;
@@ -28,7 +30,7 @@ function FingerprintCard({
         <span className="font-mono text-[10px] text-neutral-500">{meta}</span>
       </div>
       <span className="break-all font-mono text-[11px] text-neutral-300" title={hash}>
-        {hash ? hash : <span className="text-neutral-600">not produced yet</span>}
+        {hash ? hash : <span className="text-neutral-600">{terminal ? "not produced in this run" : "not produced yet"}</span>}
       </span>
       {checks?.length ? (
         <ul className="flex flex-col gap-1">
@@ -47,6 +49,7 @@ function FingerprintCard({
 export function FingerprintsPanel({ summary }: { summary: RunSummary }) {
   const base = summary.baselineResult;
   const final = summary.finalResult;
+  const terminal = isTerminal(summary.status);
   const verifierChecks: { passed: boolean; text: string }[] = [];
   if (base) verifierChecks.push({ passed: base.verifierSha256 === summary.verifierSha256, text: "baseline run used the pinned verifier" });
   if (final) verifierChecks.push({ passed: final.verifierSha256 === summary.verifierSha256, text: "final run used the pinned verifier" });
@@ -62,15 +65,17 @@ export function FingerprintsPanel({ summary }: { summary: RunSummary }) {
         description="sha256 of every artifact this run produced or executed. Hashes identify artifacts; they are not proof of correctness."
       />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <FingerprintCard name="Frozen verifier" meta="verifier.mjs · pinned before any model call" hash={summary.verifierSha256} checks={verifierChecks} />
-        <FingerprintCard name="Original handler" meta="handler.mjs · seeded baseline" hash={summary.baselineSha256} checks={baselineChecks} />
+        <FingerprintCard terminal={terminal} name="Frozen verifier" meta="verifier.mjs · pinned before any model call" hash={summary.verifierSha256} checks={verifierChecks} />
+        <FingerprintCard terminal={terminal} name="Original handler" meta="handler.mjs · seeded baseline" hash={summary.baselineSha256} checks={baselineChecks} />
         <FingerprintCard
+          terminal={terminal}
           name="Patched handler"
-          meta={final ? "handler.mjs · final candidate" : "handler.mjs · final candidate (pending)"}
+          meta={final ? "handler.mjs · final candidate" : terminal ? "handler.mjs · final candidate" : "handler.mjs · final candidate (pending)"}
           hash={final?.handlerSha256}
           checks={patchedChecks}
         />
         <FingerprintCard
+          terminal={terminal}
           name="Agent tests"
           meta={summary.generatedTests ? `${summary.generatedTests.testFilename} · model-written` : "agent-tests.mjs · model-written"}
           hash={summary.generatedTests?.sha256}

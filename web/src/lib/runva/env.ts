@@ -1,5 +1,8 @@
 // Server-only configuration. Never send any of these values to the browser.
 
+/** Treat placeholders like "..." as missing: real provider keys are long. */
+const realKey = (v: string | undefined): string | undefined => (v && v.trim().length >= 20 ? v.trim() : undefined);
+
 export type SandboxEnv = {
   apiKey: string | undefined;
   /** NAME of the env var that supplied the key (never the value). */
@@ -15,7 +18,7 @@ export type SandboxEnv = {
 export function sandboxEnv(): SandboxEnv {
   // ONLY the user's own sandbox key. CREATEOS_PLAN_API_KEY / CREATEOS_PROJECT_API_KEY belong to a different
   // CreateOS account and must never be used for sandbox execution.
-  const apiKey = process.env.CREATEOS_SANDBOX_API_KEY || undefined;
+  const apiKey = realKey(process.env.CREATEOS_SANDBOX_API_KEY);
   const apiKeySource = apiKey ? "CREATEOS_SANDBOX_API_KEY" : null;
   const egressRaw = process.env.RUNVA_SANDBOX_EGRESS;
   let egress = egressRaw ? egressRaw.split(",").map((s) => s.trim()).filter(Boolean) : ["registry.npmjs.org:443"];
@@ -42,9 +45,9 @@ export const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-5.5";
 export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
 
 export function llmEnv(): LlmEnv {
-  const or = process.env.OPENROUTER_API_KEY;
+  const or = realKey(process.env.OPENROUTER_API_KEY);
   if (or) return { provider: "openrouter", apiKey: or, model: process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL };
-  const an = process.env.ANTHROPIC_API_KEY;
+  const an = realKey(process.env.ANTHROPIC_API_KEY);
   if (an) return { provider: "anthropic", apiKey: an, model: process.env.ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL };
   return { provider: "none", apiKey: undefined, model: process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL };
 }

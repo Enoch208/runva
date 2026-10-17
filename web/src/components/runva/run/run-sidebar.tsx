@@ -18,6 +18,7 @@ export const RUN_SECTIONS = {
   evidence: [
     { label: "Verdict", href: "#verdict" },
     { label: "Before / after", href: "#evidence" },
+    { label: "Proof of execution", href: "#execution-proof" },
     { label: "Verifier V1–V6", href: "#verifier" },
     { label: "Fingerprints", href: "#fingerprints" },
   ],

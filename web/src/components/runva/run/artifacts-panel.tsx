@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { CommandEvidence, PatchAttempt, RunSummary } from "@/lib/runva/types";
-import { collectCommands, formatMs, shortHash } from "../run-model";
+import { collectCommands, formatMs, isTerminal, shortHash } from "../run-model";
 import { DiffView, diffStats } from "./diff-view";
 import { CodeBlock, ExitChip, MonoChip, OutputBlock, Panel, PanelTitle, cx } from "./primitives";
 
@@ -13,6 +13,7 @@ export function ArtifactsPanel({ summary }: { summary: RunSummary }) {
   const [tab, setTab] = useState<Tab>("diff");
   const commands = collectCommands(summary);
   const attempts = [...(summary.attempts ?? [])].sort((a, b) => a.attempt - b.attempt);
+  const terminal = isTerminal(summary.status);
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "tests", label: "Generated tests", count: summary.generatedTests ? 1 : 0 },
     { key: "diff", label: "Patch diff", count: attempts.length },
@@ -41,9 +42,9 @@ export function ArtifactsPanel({ summary }: { summary: RunSummary }) {
         ))}
       </div>
       <div role="tabpanel" className="min-w-0">
-        {tab === "tests" ? <TestsTab summary={summary} /> : null}
-        {tab === "diff" ? <DiffTab attempts={attempts} /> : null}
-        {tab === "commands" ? <CommandsTab commands={commands} /> : null}
+        {tab === "tests" ? <TestsTab summary={summary} terminal={terminal} /> : null}
+        {tab === "diff" ? <DiffTab attempts={attempts} terminal={terminal} /> : null}
+        {tab === "commands" ? <CommandsTab commands={commands} terminal={terminal} /> : null}
       </div>
     </Panel>
   );
@@ -53,8 +54,9 @@ function Empty({ children }: { children: string }) {
   return <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-xs text-neutral-500">{children}</p>;
 }
 
-function TestsTab({ summary }: { summary: RunSummary }) {
+function TestsTab({ summary, terminal }: { summary: RunSummary; terminal: boolean }) {
   const t = summary.generatedTests;
+  if (!t && terminal) return <Empty>Not produced in this run.</Empty>;
   if (!t) return <Empty>The agent writes an adversarial replay module from the contract. It appears here once the model returns valid code.</Empty>;
   return (
     <div className="flex flex-col gap-4">
@@ -79,8 +81,9 @@ function TestsTab({ summary }: { summary: RunSummary }) {
   );
 }
 
-function DiffTab({ attempts }: { attempts: PatchAttempt[] }) {
+function DiffTab({ attempts, terminal }: { attempts: PatchAttempt[]; terminal: boolean }) {
   const [selected, setSelected] = useState<number | null>(null);
+  if (attempts.length === 0 && terminal) return <Empty>Not produced in this run.</Empty>;
   if (attempts.length === 0) {
     return <Empty>After the baseline failure is reproduced, the agent writes a minimal patch to handler.mjs. The real diff appears here.</Empty>;
   }
@@ -138,7 +141,7 @@ function DiffTab({ attempts }: { attempts: PatchAttempt[] }) {
             frozen verifier <ExitChip code={current.verifier.exitCode} />
           </span>
         ) : (
-          <span className="text-neutral-600">verifier not run yet</span>
+          <span className="text-neutral-600">{terminal ? "verifier not run" : "verifier not run yet"}</span>
         )}
       </div>
 
@@ -147,7 +150,8 @@ function DiffTab({ attempts }: { attempts: PatchAttempt[] }) {
   );
 }
 
-function CommandsTab({ commands }: { commands: CommandEvidence[] }) {
+function CommandsTab({ commands, terminal }: { commands: CommandEvidence[]; terminal: boolean }) {
+  if (commands.length === 0 && terminal) return <Empty>Not produced in this run.</Empty>;
   if (commands.length === 0) {
     return <Empty>Every command executed inside the CreateOS sandbox is listed here with its real exit code, timing and output.</Empty>;
   }

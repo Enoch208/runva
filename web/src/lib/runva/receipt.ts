@@ -1,8 +1,8 @@
 import type { CommandEvidence, RunSummary, VerifierResult } from "./types";
 
-const SCOPE =
+export const SCOPE =
   "Verified for these synthetic conditions in this sandbox. Not a production guarantee.";
-const DURABILITY =
+export const DURABILITY =
   "The fix may use in-memory state and in-flight coordination, which is valid only for this single-process fixture. Production durability requires a transactional/idempotent datastore; passing this fixture is not a guarantee across process crashes, restarts, or multiple service instances.";
 
 const fence = (s: string, lang = "") => {
@@ -137,4 +137,72 @@ export function renderPatchFile(S: RunSummary): string | null {
     ...final.sourceCode.split("\n").map((l) => `# ${l}`),
     "",
   ].join("\n");
+}
+
+/** Machine-readable receipt (schema runva.receipt.v1). Sanitized: no keys, short sandbox ids only. */
+export function buildReceiptJson(S: RunSummary) {
+  const final = S.attempts.find((a) => S.finalResult && a.sourceSha256 === S.finalResult.handlerSha256) ?? S.attempts[S.attempts.length - 1];
+  const verdictOf = (v: VerifierResult | undefined) =>
+    v
+      ? {
+          exitCode: v.exitCode,
+          verdictParsed: !!v.verdict,
+          pass: v.verdict?.pass ?? false,
+          durationMs: v.verdict?.durationMs ?? null,
+          handlerSha256: v.handlerSha256,
+          sandboxId: v.command.sandboxId,
+          at: v.command.at,
+          cases: (v.verdict?.cases ?? []).map((c) => ({ id: c.id, title: c.title, pass: c.pass, observed: c.observed, expected: c.expected, details: c.details ?? null })),
+        }
+      : null;
+  return {
+    schema: "runva.receipt.v1" as const,
+    runId: S.runId,
+    scenarioId: S.scenarioId,
+    contract: S.contract,
+    startedAt: S.startedAt,
+    finishedAt: S.finishedAt ?? null,
+    durationMs: S.durationMs ?? null,
+    status: S.status,
+    verified: S.status === "VERIFIED",
+    error: S.error ?? null,
+    model: S.model,
+    provider: S.provider ?? null,
+    credentialSource: S.credentialSource ?? null,
+    sandbox: S.sandbox ? { shape: S.sandbox.shape, region: S.sandbox.region, egress: S.sandbox.egress, ingressEnabled: false } : null,
+    sandboxes: S.sandboxes ?? [],
+    freshVerifierVm: !!S.freshVerifierVm && (S.sandboxes ?? []).some((s) => s.purpose === "fresh-verifier"),
+    hashes: {
+      algorithm: "sha256",
+      baselineHandler: S.baselineSha256 || null,
+      candidateHandler: S.finalResult?.handlerSha256 ?? final?.sourceSha256 ?? null,
+      verifier: S.verifierSha256 || null,
+      agentTests: S.generatedTests?.sha256 ?? null,
+    },
+    egressCheck: S.egressCheck
+      ? { blocked: S.egressCheck.blocked, cmd: S.egressCheck.command.cmd, exitCode: S.egressCheck.command.exitCode, stderr: S.egressCheck.command.stderr.slice(0, 300), sandboxId: S.egressCheck.command.sandboxId }
+      : null,
+    verifierIntegrity: S.verifierIntegrity ?? null,
+    baseline: {
+      agentTestsExitCode: S.baselineAgentTests?.exitCode ?? null,
+      verifier: verdictOf(S.baselineResult),
+    },
+    attemptCount: S.attemptCount,
+    attempts: S.attempts.map((a) => ({
+      attempt: a.attempt,
+      model: a.model,
+      sourceSha256: a.sourceSha256,
+      diagnosis: a.diagnosis,
+      changeSummary: a.changeSummary,
+      syntaxExitCode: a.syntaxCheck?.exitCode ?? null,
+      agentTestsExitCode: a.agentTests?.exitCode ?? null,
+      verifierExitCode: a.verifier?.exitCode ?? null,
+      failingCases: a.verifier?.verdict ? a.verifier.verdict.cases.filter((c) => !c.pass).map((c) => c.id) : null,
+    })),
+    final: { verifier: verdictOf(S.finalResult) },
+    scope: SCOPE,
+    durability: DURABILITY,
+    hashNote: "Hashes are reproducibility identifiers for the exact bytes that ran, not cryptographic proof of correct behavior.",
+    executionBoundary: "All model-generated code executed only inside CreateOS sandboxes; the RUNVA host never executed it.",
+  };
 }

@@ -16,10 +16,10 @@ export function ProofStrip() {
   return (
     <div
       id="proof"
-      className="animate-on-scroll [animation:fadeInUp_0.8s_ease-out_0.7s_both] mb-24 scroll-mt-32 flex flex-col gap-5 rounded-2xl border border-[#FF5A36]/20 bg-[#0a0a0a] p-5 lg:p-6"
+      className="animate-on-scroll [animation:fadeInUp_0.8s_ease-out_0.3s_both] animate mb-24 scroll-mt-32 flex flex-col gap-5 rounded-2xl border border-[#FF5A36]/20 bg-[#0a0a0a] p-5 lg:p-6"
     >
       <div className="flex max-w-2xl flex-col gap-1">
-        <h3 className="text-base font-medium text-white">Evidence, not confidence</h3>
+        <h3 className="text-base font-medium text-white">What a verdict means</h3>
         <p className="text-xs text-neutral-500">
           RUNVA never asks the model whether it fixed the code. A run is verified only when the unmodified, hash-pinned
           verifier passes in a real CreateOS execution.

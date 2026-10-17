@@ -9,7 +9,11 @@ import { SandboxSession, listSandboxesBounded } from "../src/lib/runva/sandbox";
 import { loadFixture } from "../src/lib/runva/fixture";
 import { parseVerdict, hostVerdictPass } from "../src/lib/runva/verifier";
 import { llmEnv, sandboxEnv } from "../src/lib/runva/env";
-import type { RunEvent } from "../src/lib/runva/types";
+import { buildReceiptJson, renderPatchFile, renderReceipt } from "../src/lib/runva/receipt";
+import { redact } from "../src/lib/runva/util";
+import type { RunEvent, RunSummary } from "../src/lib/runva/types";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 const t0 = Date.now();
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`.padStart(7);
@@ -58,8 +62,50 @@ async function baselineOnly() {
   }
 }
 
-async function full() {
-  const gate = checkCanStart(process.env.RUNVA_ACCESS_CODE);
+function sanitize(text: string): string {
+  // Keys are never stored, but scrub anyway; also drop anything that looks like an email address.
+  return redact(text).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email]");
+}
+
+function saveEvidence(S: RunSummary): string {
+  const dir = path.resolve(process.cwd(), "..", "evidence", "runs", S.runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "receipt.md"), sanitize(renderReceipt(S)));
+  writeFileSync(path.join(dir, "receipt.json"), sanitize(JSON.stringify(buildReceiptJson(S), null, 2)) + "\n");
+  writeFileSync(path.join(dir, "summary.json"), sanitize(JSON.stringify(S, null, 2)) + "\n");
+  const patch = renderPatchFile(S);
+  if (patch) writeFileSync(path.join(dir, "patch.diff"), sanitize(patch));
+  if (S.generatedTests) writeFileSync(path.join(dir, "agent-tests.mjs"), sanitize(S.generatedTests.testCode));
+  return dir;
+}
+
+const v1 = (r: RunSummary["baselineResult"]) => {
+  const c = r?.verdict?.cases.find((x) => x.id === "V1");
+  const o = c?.observed as { fulfillments?: number } | null | undefined;
+  return o && typeof o.fulfillments === "number" ? o.fulfillments : null;
+};
+
+function metrics(S: RunSummary) {
+  return {
+    runId: S.runId,
+    status: S.status,
+    attempts: S.attemptCount,
+    durationMs: S.durationMs,
+    vmCreateMs: (S.sandboxes ?? []).map((s) => `${s.purpose}:${s.createMs}`).join(" "),
+    baselineV1Fulfillments: v1(S.baselineResult),
+    finalV1Fulfillments: v1(S.finalResult),
+    egressBlocked: S.egressCheck ? S.egressCheck.blocked : null,
+    verifierIntegrityMatch: S.verifierIntegrity ? S.verifierIntegrity.match : null,
+    allVmsDestroyed: (S.sandboxes ?? []).every((s) => s.destroyed),
+  };
+}
+
+async function full(): Promise<RunSummary> {
+  let gate = checkCanStart(process.env.RUNVA_ACCESS_CODE);
+  while (!gate.ok && gate.status === 429) {
+    await new Promise((r) => setTimeout(r, ((gate as { retryAfterSec?: number }).retryAfterSec ?? 5) * 1000));
+    gate = checkCanStart(process.env.RUNVA_ACCESS_CODE);
+  }
   if (!gate.ok) throw new Error(gate.error);
   const { record, done } = startRun();
   let seen = 0;
@@ -93,14 +139,26 @@ async function full() {
       2,
     ),
   );
+  if (!process.argv.includes("--no-save")) console.log(`evidence saved: ${saveEvidence(S)}`);
+  console.log("METRICS " + JSON.stringify(metrics(S)));
+  return S;
 }
 
 async function main() {
   const sb = sandboxEnv();
   const llm = llmEnv();
   console.log(`config: sandboxKey=${sb.apiKeySource ?? "MISSING"} baseUrl=${sb.baseUrl} shape=${sb.shape} egress=${sb.egress.join(",")} llm=${llm.provider}:${llm.model} freshVerifierVm=${sb.freshVerifierVm}`);
+  const ri = process.argv.indexOf("--repeat");
+  const repeat = ri > 0 ? Math.max(1, Math.min(5, Number(process.argv[ri + 1]) || 1)) : 1;
   if (process.argv.includes("--baseline")) await baselineOnly();
-  else await full();
+  else {
+    const all: ReturnType<typeof metrics>[] = [];
+    for (let i = 0; i < repeat; i++) {
+      console.log(`\n######## RUN ${i + 1}/${repeat} ########`);
+      all.push(metrics(await full()));
+    }
+    if (repeat > 1) console.table(all);
+  }
   if (sb.apiKey && !process.argv.includes("--no-cleanup-check")) await cleanupCheck();
 }
 
