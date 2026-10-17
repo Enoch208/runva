@@ -1,0 +1,33 @@
+{
+  "id": "webhook-idempotency",
+  "title": "Stripe-style payment webhook: fulfill each paid order exactly once",
+  "contract": "One paid order leads to exactly one fulfillment, even when the webhook is delivered more than once, concurrently, or under a different event ID; a failed fulfillment is never marked complete.",
+  "language": "javascript (ESM, Node 20+, built-ins only)",
+  "targetFile": "handler.mjs",
+  "files": {
+    "baseline": "handler.vulnerable.mjs",
+    "verifier": "verifier.mjs",
+    "invariant": "invariant.md"
+  },
+  "sandbox": {
+    "handlerPath": "/workspace/target/handler.mjs",
+    "verifierPath": "/workspace/verification.mjs",
+    "command": "node /workspace/verification.mjs"
+  },
+  "interface": "export async function handleWebhook(event, deps) -> Promise<{ ok: boolean, action: \"fulfilled\" | \"duplicate\" | \"ignored\" }>; deps = { fulfillOrder: async (orderId: string) => void } (may throw)",
+  "eventExample": {
+    "id": "evt_demo_001",
+    "type": "payment_intent.succeeded",
+    "data": { "object": { "id": "pi_demo_001", "metadata": { "order_id": "order_demo_001" } } }
+  },
+  "cases": [
+    { "id": "V1", "title": "Same event delivered 20 times concurrently fulfills the order once" },
+    { "id": "V2", "title": "Different event IDs for the same payment/order fulfill it once" },
+    { "id": "V3", "title": "Unknown event types are acknowledged and ignored" },
+    { "id": "V4", "title": "Two different orders are each fulfilled exactly once" },
+    { "id": "V5", "title": "Failed fulfillment is not marked complete; retry fulfills exactly once" },
+    { "id": "V6", "title": "Module exports handleWebhook and fulfills a valid event" }
+  ],
+  "expectedBaseline": { "failing": ["V1", "V2"], "passing": ["V3", "V4", "V5", "V6"] },
+  "scope": "Verified for these synthetic conditions in this sandbox. Not a production guarantee."
+}
