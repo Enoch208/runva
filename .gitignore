@@ -12,3 +12,5 @@ artifacts/private/
 .createos.json
 .vercel
 .projects/state.local.json
+*.MOV
+*.mov
