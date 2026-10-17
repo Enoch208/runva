@@ -5,7 +5,7 @@ Copy-paste text for the official form, the Stripe Projects leaderboard, and buil
 - **Deadline:** 5:30 PM PT, Oct 17 2026 (01:30 WAT, Oct 18)
 - **Stripe Projects leaderboard code:** `CreateOS-2026`
 - **Sponsor X handle:** @createosai
-- **Links:** demo `[demo link]` · repo `[repo link]` · video `[video link]`
+- **Links:** demo `https://production-runva.tyzo.nodeops.app` · repo `https://github.com/Enoch208/runva` · video `[video link]`
 
 ---
 
@@ -111,8 +111,8 @@ One payment, twenty webhook retries, twenty shipments.
 
 RUNVA writes attack tests, runs them in a real @createosai sandbox, patches the bug, and proves the fix with a frozen verifier in a fresh VM. The LLM never grades itself.
 
-[demo link]
-[repo link]
+https://production-runva.tyzo.nodeops.app
+https://github.com/Enoch208/runva
 ```
 
 ## X post 2 (receipt angle)
@@ -123,8 +123,8 @@ Most AI coding agents hand you a patch. RUNVA hands you a receipt.
 Real CreateOS VMs, real exit codes, a hash-pinned verifier the model can't touch, egress locked down on every run.
 
 Built for @createosai x Stripe Projects.
-[demo link]
-[repo link]
+https://production-runva.tyzo.nodeops.app
+https://github.com/Enoch208/runva
 ```
 
 > Both posts are 280 characters or fewer, counting each link as 23 characters (X's t.co length). Attach the 30-second backup cut from `docs/DEMO_SCRIPT.md` as the video.
@@ -150,8 +150,8 @@ The sandbox is locked down (ingress off, egress allowlist), and every run proves
 
 What it isn't: a production guarantee. It covers one scenario with synthetic events, and the receipt says exactly that.
 
-Demo: [demo link]
-Code: [repo link]
+Demo: https://production-runva.tyzo.nodeops.app
+Code: https://github.com/Enoch208/runva
 
 Built by [team names].
 ```
@@ -161,8 +161,8 @@ Built by [team names].
 ## Final submission checklist
 
 - [ ] Video uploaded and viewable, 2:30–2:45, team member on camera → `[video link]`
-- [ ] Deployed demo works from an incognito window → `[demo link]`
-- [ ] Repo public, with README and `evidence/runs/` committed → `[repo link]`
+- [ ] Deployed demo works from an incognito window → `https://production-runva.tyzo.nodeops.app`
+- [ ] Repo public, with README and `evidence/runs/` committed → `https://github.com/Enoch208/runva`
 - [ ] No secrets, Stripe account IDs or account emails in the repo, video or posts
 - [ ] X post published, tagging @createosai, and LinkedIn post published, tagging CreateOS
 - [ ] Official form submitted before 5:30 PM PT (01:30 WAT)

@@ -3,7 +3,7 @@
 Target length: **2:30–2:45**. One team member on camera for the open and close (picture-in-picture is fine for the middle).
 
 **Rules for this recording**
-- Every number spoken must be on screen at that moment, from a real run. Brackets like `[real run duration]` mark values you read off the screen or receipt. Never fill them from memory or from this doc.
+- Every number spoken must be on screen at that moment, from a real run. Brackets like `~45–65 s (read the on-screen timer)` mark values you read off the screen or receipt. Never fill them from memory or from this doc.
 - Record one continuous, real end-to-end run. Cut **idle time only**, and label each cut on screen ("waiting on VM, 0:XX cut"). Don't splice in footage from a different run.
 - If the live run ends FAILED or INFRA_ERROR, say so. Then switch to the backup completed real run (see checklist) and label it on screen: "Earlier real run, [run id]".
 - Never show `.env`, API keys, Stripe account IDs or account emails.
@@ -36,35 +36,35 @@ Target length: **2:30–2:45**. One team member on camera for the open and close
 **SAY:** "I click run. The model writes adversarial replay tests: real code, not a description. RUNVA boots a fresh CreateOS Firecracker VM, uploads the handler and the tests, and runs them. Nothing the model writes ever runs on our server."
 
 ### 1:00–1:20 — Baseline failure
-**SCREEN:** "Failure reproduced" event. Zoom on the frozen verifier result vs. baseline: **V1 observed `[V1 baseline fulfillments]` fulfillments, expected 1**; V2 failing; the real non-zero exit code `[baseline exit code]`; the stdout tail.
+**SCREEN:** "Failure reproduced" event. Zoom on the frozen verifier result vs. baseline: **V1 observed `20` fulfillments, expected 1**; V2 failing; the real non-zero exit code `1`; the stdout tail.
 
-**SAY:** "And it breaks. Twenty concurrent deliveries of the same event, [V1 baseline fulfillments] fulfillments. Two event IDs for the same order also ship twice. That's real stdout and a real exit code from the VM."
+**SAY:** "And it breaks. Twenty concurrent deliveries of the same event, 20 fulfillments. Two event IDs for the same order also ship twice. That's real stdout and a real exit code from the VM."
 
 > Say the number on screen. The seeded baseline is expected to show 20, but read it, don't assume it.
 
 ### 1:20–1:45 — Generated patch diff
 **SCREEN:** "Asking the model for a minimal patch" event, then the diff view. Highlight the change: idempotency keyed on the order, with concurrent deliveries coordinated. If a repair happened, show the "Repair 1: feeding real sandbox failures back to the model" event and the failing output it was given.
 
-**SAY (no repair):** "From that failure output, the model writes a minimal patch, keyed on the order instead of the event, and safe under concurrency. Candidate [attempt number] passes in the work VM."
+**SAY (no repair):** "From that failure output, the model writes a minimal patch, keyed on the order instead of the event, and safe under concurrency. Candidate 1 passes in the work VM."
 
-**SAY (if a repair occurred):** "The first patch still failed, so RUNVA fed the real failure back and the model repaired its own patch. It passed on attempt [attempt number]."
+**SAY (if a repair occurred):** "The first patch still failed, so RUNVA fed the real failure back and the model repaired its own patch. It passed on attempt 1."
 
 > Don't force or fake a repair. Use whichever line matches the run.
 
 ### 1:45–2:05 — Fresh-VM verdict
-**SCREEN:** "Creating a FRESH CreateOS sandbox for independent verification" → a new sandbox ID `[fresh sandbox id]` that differs from the work VM. "Verifier integrity: in-VM sha256 matches the frozen hash." Then the V1–V6 table: **V1 observed `[V1 final fulfillments]` fulfillment**, all cases passing, exit `[final exit code]`. Status badge: **VERIFIED**.
+**SCREEN:** "Creating a FRESH CreateOS sandbox for independent verification" → a new sandbox ID `[fresh sandbox id]` that differs from the work VM. "Verifier integrity: in-VM sha256 matches the frozen hash." Then the V1–V6 table: **V1 observed `1` fulfillment**, all cases passing, exit `0`. Status badge: **VERIFIED**.
 
-**SAY:** "Now the part that matters. We don't ask the model whether it fixed anything. A brand-new VM gets only the final handler and our frozen verifier, and we check the verifier's hash inside that VM. Twenty deliveries, [V1 final fulfillments] fulfillment. V1 through V6 pass, exit zero. Verified."
+**SAY:** "Now the part that matters. We don't ask the model whether it fixed anything. A brand-new VM gets only the final handler and our frozen verifier, and we check the verifier's hash inside that VM. Twenty deliveries, 1 fulfillment. V1 through V6 pass, exit zero. Verified."
 
 > Only say "verified" if the badge on screen says VERIFIED.
 
 ### 2:05–2:15 — Egress-blocked proof
-**SCREEN:** The timeline event "Egress blocked: example.com unreachable from sandbox (curl exit `[curl exit code]`)", with the allowlist visible.
+**SCREEN:** The timeline event "Egress blocked: example.com unreachable from sandbox (curl exit `35`)", with the allowlist visible.
 
 **SAY:** "The sandbox is locked down too: ingress off, egress on an allowlist. Every run proves it. A curl to a non-allowlisted host fails from inside the VM."
 
 ### 2:15–2:25 — Receipt download
-**SCREEN:** Click the Markdown receipt download (the `.json` receipt and `.diff` patch sit next to it). Open the Markdown: run status, sandbox IDs, commands with exit codes, before/after table, diff, SHA-256 hashes, and the scope section. Total time: `[real run duration]`.
+**SCREEN:** Click the Markdown receipt download (the `.json` receipt and `.diff` patch sit next to it). Open the Markdown: run status, sandbox IDs, commands with exit codes, before/after table, diff, SHA-256 hashes, and the scope section. Total time: `~45–65 s (read the on-screen timer)`.
 
 **SAY:** "You get a receipt: every command, every exit code, the diff, the hashes, and an honest scope. This proves these synthetic conditions in a sandbox. It's not a production guarantee."
 
@@ -88,9 +88,9 @@ Use this if the full cut runs long or for a social clip. Same rules: real run, r
 |---|---|---|
 | 0:00–0:05 | Presenter on camera | "One payment, twenty webhook retries, twenty shipments." |
 | 0:05–0:12 | Click **Start a run** → timeline: tests written, CreateOS VM created | "RUNVA writes attack tests and runs them in a real CreateOS sandbox." |
-| 0:12–0:17 | Baseline: V1 `[V1 baseline fulfillments]` fulfillments, exit `[baseline exit code]` | "Baseline: [V1 baseline fulfillments] fulfillments. Bug reproduced." |
+| 0:12–0:17 | Baseline: V1 `20` fulfillments, exit `1` | "Baseline: 20 fulfillments. Bug reproduced." |
 | 0:17–0:22 | Patch diff | "The model patches it from the real failure output." |
-| 0:22–0:27 | Fresh VM → V1 `[V1 final fulfillments]` fulfillment, VERIFIED, egress-blocked event | "A fresh VM and a frozen verifier: [V1 final fulfillments] fulfillment. Verified, with egress locked down." |
+| 0:22–0:27 | Fresh VM → V1 `1` fulfillment, VERIFIED, egress-blocked event | "A fresh VM and a frozen verifier: 1 fulfillment. Verified, with egress locked down." |
 | 0:27–0:30 | Receipt download, then presenter | "Evidence, not confidence. RUNVA." |
 
 ---

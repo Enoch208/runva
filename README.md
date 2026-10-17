@@ -122,6 +122,21 @@ Real run receipts are committed in [`evidence/runs/`](evidence/runs/). Each one 
 
 For actual counts, durations and attempt numbers, see `evidence/runs/`. This README doesn't restate them, so it can't drift from the receipts.
 
+
+### Real results (5 runs, October 17, 2026)
+
+Every row is a real run: CreateOS EU sandbox VMs plus OpenRouter `anthropic/claude-sonnet-5.5`. Receipts for the CLI runs are in [`evidence/runs/`](evidence/runs/).
+
+| Run | Path | Status | Patch attempts | Total time | V1 fulfillments before → after | Egress blocked | Verifier hash in VM |
+|---|---|---|---|---|---|---|---|
+| `run_9ce5ab644beb2546eb` | CLI e2e | VERIFIED | 1 | 66.5 s | 20 → 1 | ✓ (curl exit 35) | match |
+| `run_88c5e7d33d000c950b` | CLI e2e | VERIFIED | 1 | 51.8 s | 20 → 1 | ✓ | match |
+| `run_d0ac7124a7992a5f40` | CLI e2e | VERIFIED | 1 | 46.1 s | 20 → 1 | ✓ | match |
+| `run_d6607067daacf459e2` | Web API | VERIFIED | 1 | ~40 s | 20 → 1 | ✓ | match |
+| `run_5ccdc7a1332e0c2ad0` | Web UI (prod build) | VERIFIED | 1 | 53 s | 20 → 1 | ✓ | match |
+
+The model wrote three different patches (sha256 prefixes `f2cbd018`, `21364f4a`, `c6b0b603`), and every one passed the frozen verifier in a fresh VM. VMs were created in 0.3–3.2 s and destroyed in ~0.2 s. `scripts/reverify.mjs` independently re-ran the frozen verifier against the `run_9ce5…` patch in a separate VM: 6/6 pass, exit 0. The repair loop (attempts 2–3) exists and is tested on the host, but no real run needed it.
+
 ## Verify it yourself
 
 ```bash
