@@ -6,3 +6,6 @@ config: sandboxKey=CREATEOS_SANDBOX_API_KEY baseUrl=https://api-eu.sb.createos.s
    0.3s #  3 [INSPECTING] artifact  Baseline handler.mjs loaded
    0.3s #  4 [INSPECTING] artifact  Frozen verifier hashed (agent cannot see or edit it)
    0.3s #  5 [INSPECTING] llm       Asking anthropic/claude-sonnet-5.5 to write adversarial tests
+  23.1s #  6 [TESTS_GENERATED] phase     Agent wrote adversarial tests  (latencyMs=23060)
+  23.1s #  7 [TESTS_GENERATED] sandbox   Creating CreateOS sandbox
+  24.4s #  8 [TESTS_GENERATED] sandbox   Sandbox sb-01m…2aha running (created in 842ms)  (createMs=842 sandboxId="sb-01m…2aha")
