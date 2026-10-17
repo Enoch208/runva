@@ -1,3 +1,12 @@
+node_modules/
+.next/
+artifacts/private/
+*.pem
+.createos.json
+.vercel
+*.MOV
+*.mov
+
 .projects/cache
 .projects/vault
 .projects/state.test.json
@@ -5,12 +14,3 @@
 .env
 .env.*
 !.env.example
-node_modules/
-.next/
-artifacts/private/
-*.pem
-.createos.json
-.vercel
-.projects/state.local.json
-*.MOV
-*.mov
