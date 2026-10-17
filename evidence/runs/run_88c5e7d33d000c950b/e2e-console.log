@@ -1,0 +1,120 @@
+config: sandboxKey=CREATEOS_SANDBOX_API_KEY baseUrl=https://api-eu.sb.createos.sh shape=s-1vcpu-1gb egress=registry.npmjs.org:443 llm=openrouter:anthropic/claude-sonnet-5.5 freshVerifierVm=true
+######## RUN 1/2 ########
+   0.3s #  1 [CREATED] phase     Run created
+   0.3s #  2 [INSPECTING] phase     Inspecting target and freezing the independent verifier
+   0.3s #  3 [INSPECTING] artifact  Baseline handler.mjs loaded
+   0.3s #  4 [INSPECTING] artifact  Frozen verifier hashed (agent cannot see or edit it)
+   0.3s #  5 [INSPECTING] llm       Asking anthropic/claude-sonnet-5.5 to write adversarial tests
+  23.1s #  6 [TESTS_GENERATED] phase     Agent wrote adversarial tests  (latencyMs=23060)
+  23.1s #  7 [TESTS_GENERATED] sandbox   Creating CreateOS sandbox
+  24.4s #  8 [TESTS_GENERATED] sandbox   Sandbox sb-01m…2aha running (created in 842ms)  (createMs=842 sandboxId="sb-01m…2aha")
+  25.4s #  9 [TESTS_GENERATED] artifact  Uploaded baseline handler, agent tests and frozen verifier to the sandbox  (sandboxId="sb-01m…2aha")
+  25.9s # 10 [TESTS_GENERATED] command   Egress blocked: example.com unreachable from sandbox (curl exit 35)  (exitCode=35 execMs=58.562 sandboxId="sb-01m…2aha")
+  25.9s # 11 [BASELINE_RUNNING] phase     Running the vulnerable baseline in the sandbox
+  26.2s # 12 [BASELINE_RUNNING] command   Baseline syntax check: exit 0  (exitCode=0 execMs=81.937 sandboxId="sb-01m…2aha")
+  26.7s # 13 [BASELINE_RUNNING] command   Agent tests vs baseline: exit 1 (failures exposed)  (exitCode=1 execMs=244.818 sandboxId="sb-01m…2aha")
+  27.2s # 14 [BASELINE_RUNNING] command   baseline: frozen verifier: exit 1 — 4/6 cases pass  (exitCode=1 execMs=407.54 sandboxId="sb-01m…2aha" failing=["V1","V2"])
+  27.2s # 15 [BASELINE_RUNNING] assertion V1 FAIL — Same event delivered 20 times concurrently fulfills the order once
+  27.2s # 16 [BASELINE_RUNNING] assertion V2 FAIL — Different event IDs for the same payment/order fulfill it once
+  27.2s # 17 [BASELINE_RUNNING] assertion V3 PASS — Unknown event types are acknowledged and ignored
+  27.2s # 18 [BASELINE_RUNNING] assertion V4 PASS — Two different orders are each fulfilled exactly once
+  27.2s # 19 [BASELINE_RUNNING] assertion V5 PASS — Failed fulfillment is not marked complete; retry fulfills exactly once
+  27.2s # 20 [BASELINE_RUNNING] assertion V6 PASS — Module exports handleWebhook and fulfills a valid event
+  27.2s # 21 [FAILURE_REPRODUCED] phase     Failure reproduced: V1, V2 fail on baseline  (exitCode=1 failing=["V1","V2"])
+  27.2s # 22 [PATCH_GENERATING] phase     Asking the model for a minimal patch, conditioned on the real failures  (attempt=1)
+  27.2s # 23 [PATCH_GENERATING] llm       Asking anthropic/claude-sonnet-5.5 for patch candidate 1  (attempt=1)
+  39.0s # 24 [PATCH_GENERATING] artifact  Candidate 1: handler.mjs (+30 −7 lines)  (latencyMs=11770 attempt=1)
+  39.0s # 25 [PATCH_TESTING] phase     Testing candidate 1 in sandbox sb-01m…2aha  (attempt=1)
+  47.5s # 26 [PATCH_TESTING] command   Candidate 1 syntax check: exit 0  (exitCode=0 execMs=18.015 sandboxId="sb-01m…2aha" attempt=1)
+  48.0s # 27 [PATCH_TESTING] command   Agent tests vs candidate 1: exit 0  (exitCode=0 execMs=191.136 sandboxId="sb-01m…2aha" attempt=1)
+  48.5s # 28 [PATCH_TESTING] command   attempt 1: frozen verifier: exit 0 — 6/6 cases pass  (exitCode=0 execMs=318.213 sandboxId="sb-01m…2aha" failing=[])
+  48.5s # 29 [PATCH_TESTING] assertion V1 PASS — Same event delivered 20 times concurrently fulfills the order once
+  48.5s # 30 [PATCH_TESTING] assertion V2 PASS — Different event IDs for the same payment/order fulfill it once
+  48.5s # 31 [PATCH_TESTING] assertion V3 PASS — Unknown event types are acknowledged and ignored
+  48.5s # 32 [PATCH_TESTING] assertion V4 PASS — Two different orders are each fulfilled exactly once
+  48.5s # 33 [PATCH_TESTING] assertion V5 PASS — Failed fulfillment is not marked complete; retry fulfills exactly once
+  48.5s # 34 [PATCH_TESTING] assertion V6 PASS — Module exports handleWebhook and fulfills a valid event
+  48.5s # 35 [PATCH_TESTING] assertion Candidate 1 passes all frozen verifier cases in the work VM  (exitCode=0 attempt=1)
+  48.5s # 36 [INDEPENDENT_VERIFYING] phase     Independent verification: fresh VM with only the final handler + frozen verifier  (attempt=1)
+  48.8s # 37 [INDEPENDENT_VERIFYING] sandbox   Sandbox sb-01m…2aha destroyed  (sandboxId="sb-01m…2aha")
+  48.8s # 38 [INDEPENDENT_VERIFYING] sandbox   Creating a FRESH CreateOS sandbox for independent verification
+  49.0s # 39 [INDEPENDENT_VERIFYING] sandbox   Sandbox sb-01m…9zkh running (created in 334ms)  (createMs=334 sandboxId="sb-01m…9zkh")
+  49.8s # 40 [INDEPENDENT_VERIFYING] artifact  Uploaded final handler + frozen verifier  (sandboxId="sb-01m…9zkh")
+  50.1s # 41 [INDEPENDENT_VERIFYING] assertion Verifier integrity: in-VM sha256 matches the frozen hash  (sandboxId="sb-01m…9zkh")
+  51.8s # 42 [INDEPENDENT_VERIFYING] command   final: independent verifier: exit 0 — 6/6 cases pass  (exitCode=0 execMs=1377.013 sandboxId="sb-01m…9zkh" failing=[])
+  51.8s # 43 [INDEPENDENT_VERIFYING] assertion V1 PASS — Same event delivered 20 times concurrently fulfills the order once
+  51.8s # 44 [INDEPENDENT_VERIFYING] assertion V2 PASS — Different event IDs for the same payment/order fulfill it once
+  51.8s # 45 [INDEPENDENT_VERIFYING] assertion V3 PASS — Unknown event types are acknowledged and ignored
+  51.8s # 46 [INDEPENDENT_VERIFYING] assertion V4 PASS — Two different orders are each fulfilled exactly once
+  51.8s # 47 [INDEPENDENT_VERIFYING] assertion V5 PASS — Failed fulfillment is not marked complete; retry fulfills exactly once
+  51.8s # 48 [INDEPENDENT_VERIFYING] assertion V6 PASS — Module exports handleWebhook and fulfills a valid event
+  51.8s # 49 [INDEPENDENT_VERIFYING] sandbox   Sandbox sb-01m…9zkh destroyed  (sandboxId="sb-01m…9zkh")
+  51.8s # 50 [VERIFIED] phase     VERIFIED — candidate 1 passes V1–V6 in a fresh CreateOS sandbox (exit 0)
+
+================ SUMMARY ================
+{
+  "runId": "run_88c5e7d33d000c950b",
+  "status": "VERIFIED",
+  "durationMs": 51794,
+  "model": "openrouter:anthropic/claude-sonnet-5.5",
+  "credentialSource": "CREATEOS_SANDBOX_API_KEY",
+  "sandboxes": [
+    {
+      "id": "sb-01m…2aha",
+      "purpose": "work",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 842,
+      "destroyed": true,
+      "destroyMs": 181
+    },
+    {
+      "id": "sb-01m…9zkh",
+      "purpose": "fresh-verifier",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 334,
+      "destroyed": true,
+      "destroyMs": 195
+    }
+  ],
+  "egressBlocked": true,
+  "baselineVerifier": {
+    "exit": 1,
+    "failing": [
+      "V1",
+      "V2"
+    ]
+  },
+  "baselineAgentTestsExit": 1,
+  "attempts": [
+    {
+      "attempt": 1,
+      "syntax": 0,
+      "agentTests": 0,
+      "verifierExit": 0,
+      "failing": [],
+      "changeSummary": "Idempotency is now keyed on order_id instead of event.id. A `fulfilledOrders` set records only orders whose fulfillment has succeeded. An `inFlight` map holds o"
+    }
+  ],
+  "final": {
+    "exit": 0,
+    "pass": true,
+    "cases": [
+      "V1:PASS",
+      "V2:PASS",
+      "V3:PASS",
+      "V4:PASS",
+      "V5:PASS",
+      "V6:PASS"
+    ]
+  },
+  "verifierIntegrity": {
+    "expectedSha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "observedSha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "match": true
+  }
+}
+evidence saved: /Users/enoch/Projects/createos-hackathon/evidence/runs/run_88c5e7d33d000c950b
+METRICS {"runId":"run_88c5e7d33d000c950b","status":"VERIFIED","attempts":1,"durationMs":51794,"vmCreateMs":"work:842 fresh-verifier:334","baselineV1Fulfillments":20,"finalV1Fulfillments":1,"egressBlocked":true,"verifierIntegrityMatch":true,"allVmsDestroyed":true}
+

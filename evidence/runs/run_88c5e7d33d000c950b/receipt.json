@@ -1,0 +1,328 @@
+{
+  "schema": "runva.receipt.v1",
+  "runId": "run_88c5e7d33d000c950b",
+  "scenarioId": "webhook-idempotency",
+  "contract": "One paid order leads to exactly one fulfillment, even when the webhook is delivered more than once, concurrently, or under a different event ID; a failed fulfillment is never marked complete.",
+  "startedAt": "2026-10-17T22:16:24.910Z",
+  "finishedAt": "2026-10-17T22:17:16.705Z",
+  "durationMs": 51794,
+  "status": "VERIFIED",
+  "verified": true,
+  "error": null,
+  "model": "openrouter:anthropic/claude-sonnet-5.5",
+  "provider": "openrouter",
+  "credentialSource": "CREATEOS_SANDBOX_API_KEY",
+  "sandbox": {
+    "shape": "s-1vcpu-1gb",
+    "region": "eu",
+    "egress": [
+      "registry.npmjs.org:443"
+    ],
+    "ingressEnabled": false
+  },
+  "sandboxes": [
+    {
+      "id": "sb-01m…2aha",
+      "purpose": "work",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 842,
+      "destroyed": true,
+      "destroyMs": 181
+    },
+    {
+      "id": "sb-01m…9zkh",
+      "purpose": "fresh-verifier",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 334,
+      "destroyed": true,
+      "destroyMs": 195
+    }
+  ],
+  "freshVerifierVm": true,
+  "hashes": {
+    "algorithm": "sha256",
+    "baselineHandler": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0",
+    "candidateHandler": "21364f4a958be68244ef912f9e2fd7a27a3bf8a60f1c4905d101e5d5f0a1bb36",
+    "verifier": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "agentTests": "525399be76c131a57258c96d3d4ca787cbe64cfc3309c473eae3c063d38bf267"
+  },
+  "egressCheck": {
+    "blocked": true,
+    "cmd": "curl -sS -m 4 https://example.com",
+    "exitCode": 35,
+    "stderr": "curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to example.com:443 \n",
+    "sandboxId": "sb-01m…2aha"
+  },
+  "verifierIntegrity": {
+    "expectedSha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "observedSha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+    "match": true
+  },
+  "baseline": {
+    "agentTestsExitCode": 1,
+    "verifier": {
+      "exitCode": 1,
+      "verdictParsed": true,
+      "pass": false,
+      "durationMs": 379,
+      "handlerSha256": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0",
+      "sandboxId": "sb-01m…2aha",
+      "at": "2026-10-17T22:16:51.389Z",
+      "cases": [
+        {
+          "id": "V1",
+          "title": "Same event delivered 20 times concurrently fulfills the order once",
+          "pass": false,
+          "observed": {
+            "fulfillments": 20,
+            "deliveries": 20,
+            "acknowledged": 20
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "acknowledged": 20
+          },
+          "details": "20 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 20x; results: ok:fulfilled x20"
+        },
+        {
+          "id": "V2",
+          "title": "Different event IDs for the same payment/order fulfill it once",
+          "pass": false,
+          "observed": {
+            "fulfillments": 3,
+            "deliveries": 3,
+            "acknowledged": 3
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "acknowledged": 3
+          },
+          "details": "evt_demo_002_a + evt_demo_002_b (concurrent) then evt_demo_002_c, all for order_demo_002 -> fulfilled 3x; results: ok:fulfilled x3"
+        },
+        {
+          "id": "V3",
+          "title": "Unknown event types are acknowledged and ignored",
+          "pass": true,
+          "observed": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "expected": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+        },
+        {
+          "id": "V4",
+          "title": "Two different orders are each fulfilled exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2
+          },
+          "expected": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2
+          },
+          "details": "order_demo_004a -> resolved ok=true action=fulfilled; order_demo_004b -> resolved ok=true action=fulfilled"
+        },
+        {
+          "id": "V5",
+          "title": "Failed fulfillment is not marked complete; retry fulfills exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true
+          },
+          "expected": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true
+          },
+          "details": "delivery 1 (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder) | retry: resolved ok=true action=fulfilled | redelivery: resolved ok=true action=duplicate; fulfillOrder calls=2, successes=1"
+        },
+        {
+          "id": "V6",
+          "title": "Module exports handleWebhook and fulfills a valid event",
+          "pass": true,
+          "observed": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1
+          },
+          "expected": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1
+          },
+          "details": "single valid delivery -> resolved ok=true action=fulfilled"
+        }
+      ]
+    }
+  },
+  "attemptCount": 1,
+  "attempts": [
+    {
+      "attempt": 1,
+      "model": "openrouter:anthropic/claude-sonnet-5.5",
+      "sourceSha256": "21364f4a958be68244ef912f9e2fd7a27a3bf8a60f1c4905d101e5d5f0a1bb36",
+      "diagnosis": "The handler only deduplicated on event.id, and only recorded the event after `await fulfillOrder`. Overlapping deliveries all passed the check before any of them recorded, so each one fulfilled. Events with different IDs for the same order were never deduplicated. Each delivery fulfilled the order again, including redeliveries after success.",
+      "changeSummary": "Idempotency is now keyed on order_id instead of event.id. A `fulfilledOrders` set records only orders whose fulfillment has succeeded. An `inFlight` map holds one shared promise per order, so concurrent deliveries wait on a single fulfillOrder call and the others report 'duplicate'. If fulfillOrder throws, the order is not recorded and the in-flight entry is cleared. The error propagates to the owner and to any waiters, so a later retry can fulfill exactly once. A missing order_id throws instead of being acknowledged.",
+      "syntaxExitCode": 0,
+      "agentTestsExitCode": 0,
+      "verifierExitCode": 0,
+      "failingCases": []
+    }
+  ],
+  "final": {
+    "verifier": {
+      "exitCode": 0,
+      "verdictParsed": true,
+      "pass": true,
+      "durationMs": 1010,
+      "handlerSha256": "21364f4a958be68244ef912f9e2fd7a27a3bf8a60f1c4905d101e5d5f0a1bb36",
+      "sandboxId": "sb-01m…9zkh",
+      "at": "2026-10-17T22:17:14.927Z",
+      "cases": [
+        {
+          "id": "V1",
+          "title": "Same event delivered 20 times concurrently fulfills the order once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "acknowledged": 20
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "acknowledged": 20
+          },
+          "details": "20 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x; results: ok:fulfilled x1, ok:duplicate x19"
+        },
+        {
+          "id": "V2",
+          "title": "Different event IDs for the same payment/order fulfill it once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "acknowledged": 3
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "acknowledged": 3
+          },
+          "details": "evt_demo_002_a + evt_demo_002_b (concurrent) then evt_demo_002_c, all for order_demo_002 -> fulfilled 1x; results: ok:fulfilled x1, ok:duplicate x2"
+        },
+        {
+          "id": "V3",
+          "title": "Unknown event types are acknowledged and ignored",
+          "pass": true,
+          "observed": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "expected": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+        },
+        {
+          "id": "V4",
+          "title": "Two different orders are each fulfilled exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2
+          },
+          "expected": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2
+          },
+          "details": "order_demo_004a -> resolved ok=true action=fulfilled; order_demo_004b -> resolved ok=true action=fulfilled"
+        },
+        {
+          "id": "V5",
+          "title": "Failed fulfillment is not marked complete; retry fulfills exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true
+          },
+          "expected": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true
+          },
+          "details": "delivery 1 (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder) | retry: resolved ok=true action=fulfilled | redelivery: resolved ok=true action=duplicate; fulfillOrder calls=2, successes=1"
+        },
+        {
+          "id": "V6",
+          "title": "Module exports handleWebhook and fulfills a valid event",
+          "pass": true,
+          "observed": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1
+          },
+          "expected": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1
+          },
+          "details": "single valid delivery -> resolved ok=true action=fulfilled"
+        }
+      ]
+    }
+  },
+  "scope": "Verified for these synthetic conditions in this sandbox. Not a production guarantee.",
+  "durability": "The fix may use in-memory state and in-flight coordination, which is valid only for this single-process fixture. Production durability requires a transactional/idempotent datastore; passing this fixture is not a guarantee across process crashes, restarts, or multiple service instances.",
+  "hashNote": "Hashes are reproducibility identifiers for the exact bytes that ran, not cryptographic proof of correct behavior.",
+  "executionBoundary": "All model-generated code executed only inside CreateOS sandboxes; the RUNVA host never executed it."
+}

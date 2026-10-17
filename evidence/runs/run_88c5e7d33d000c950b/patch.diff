@@ -1,0 +1,107 @@
+# RUNVA patch — run run_88c5e7d33d000c950b — status VERIFIED — attempt 1 — sha256 21364f4a958be68244ef912f9e2fd7a27a3bf8a60f1c4905d101e5d5f0a1bb36
+# Verified for these synthetic conditions in this sandbox. Not a production guarantee.
+
+===================================================================
+--- a/handler.mjs	baseline
++++ b/handler.mjs	candidate 1
+@@ -1,21 +1,44 @@
+ // Payment webhook handler: fulfills an order when its payment succeeds.
++// Idempotency is at the ORDER level (not the event id): one paid order -> one fulfillment.
+ 
+-// Stripe redelivers webhooks, so remember which events we've already handled.
+-const processedEvents = new Set();
++// Orders whose fulfillment has completed successfully.
++const fulfilledOrders = new Set();
++// Orders currently being fulfilled: orderId -> shared in-flight promise.
++const inFlight = new Map();
+ 
+ export async function handleWebhook(event, deps) {
+   if (event.type !== "payment_intent.succeeded") {
+     return { ok: true, action: "ignored" };
+   }
+ 
+-  if (processedEvents.has(event.id)) {
++  const orderId = event?.data?.object?.metadata?.order_id;
++  if (typeof orderId !== "string" || orderId === "") {
++    throw new Error("payment_intent.succeeded event is missing metadata.order_id");
++  }
++
++  if (fulfilledOrders.has(orderId)) {
+     return { ok: true, action: "duplicate" };
+   }
+ 
+-  const orderId = event.data.object.metadata.order_id;
+-  await deps.fulfillOrder(orderId);
++  // Another delivery is already fulfilling this order: wait for it, don't repeat it.
++  const pending = inFlight.get(orderId);
++  if (pending) {
++    await pending; // rethrows if the in-flight fulfillment failed
++    return { ok: true, action: "duplicate" };
++  }
+ 
+-  // Only mark the event handled after fulfillment succeeds, so a failed attempt can be retried.
+-  processedEvents.add(event.id);
++  // We own the fulfillment. Register the in-flight promise synchronously (before any await).
++  const work = (async () => {
++    await deps.fulfillOrder(orderId);
++    // Record completion only after fulfillment succeeded.
++    fulfilledOrders.add(orderId);
++  })();
++  inFlight.set(orderId, work);
++
++  try {
++    await work;
++  } finally {
++    inFlight.delete(orderId);
++  }
+   return { ok: true, action: "fulfilled" };
+ }
+
+# ---------------------------------------------------------------------------
+# Final handler.mjs (complete source)
+# ---------------------------------------------------------------------------
+# // Payment webhook handler: fulfills an order when its payment succeeds.
+# // Idempotency is at the ORDER level (not the event id): one paid order -> one fulfillment.
+# 
+# // Orders whose fulfillment has completed successfully.
+# const fulfilledOrders = new Set();
+# // Orders currently being fulfilled: orderId -> shared in-flight promise.
+# const inFlight = new Map();
+# 
+# export async function handleWebhook(event, deps) {
+#   if (event.type !== "payment_intent.succeeded") {
+#     return { ok: true, action: "ignored" };
+#   }
+# 
+#   const orderId = event?.data?.object?.metadata?.order_id;
+#   if (typeof orderId !== "string" || orderId === "") {
+#     throw new Error("payment_intent.succeeded event is missing metadata.order_id");
+#   }
+# 
+#   if (fulfilledOrders.has(orderId)) {
+#     return { ok: true, action: "duplicate" };
+#   }
+# 
+#   // Another delivery is already fulfilling this order: wait for it, don't repeat it.
+#   const pending = inFlight.get(orderId);
+#   if (pending) {
+#     await pending; // rethrows if the in-flight fulfillment failed
+#     return { ok: true, action: "duplicate" };
+#   }
+# 
+#   // We own the fulfillment. Register the in-flight promise synchronously (before any await).
+#   const work = (async () => {
+#     await deps.fulfillOrder(orderId);
+#     // Record completion only after fulfillment succeeded.
+#     fulfilledOrders.add(orderId);
+#   })();
+#   inFlight.set(orderId, work);
+# 
+#   try {
+#     await work;
+#   } finally {
+#     inFlight.delete(orderId);
+#   }
+#   return { ok: true, action: "fulfilled" };
+# }
+# 
