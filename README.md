@@ -2,6 +2,10 @@
 
 **The AI reliability engineer that breaks your integration, repairs it, and proves the repair in a real sandbox.**
 
+▶️ **[Watch the 2-minute demo](https://youtu.be/tlN_ubezhjY)** (a real, unedited run) · **Live:** https://production-runva.tyzo.nodeops.app · **Evidence:** [`evidence/runs/`](evidence/runs/)
+
+![Same frozen verifier, two handlers: the original handler fulfills one order 20 times; the agent's patch fulfills it once](docs/screenshots/2-verified-before-after.png)
+
 Webhooks get retried. One payment can trigger the same fulfillment twice — under duplicate delivery, concurrent delivery, or two event IDs for the same order. A happy-path test won't catch it, and an AI-suggested patch is just a suggestion.
 
 RUNVA doesn't ask you to trust an AI patch. It:
