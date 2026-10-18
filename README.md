@@ -12,9 +12,10 @@
 > 1. ▶️ **[2-minute video](https://youtu.be/tlN_ubezhjY)**: one real, unedited run, from the AI writing tests through VERIFIED in a fresh CreateOS VM.
 > 2. **The result above:** the same frozen verifier and the same 20 concurrent deliveries; the original handler fulfills the order **20×**, the agent's patch **1×**.
 > 3. **[Real Stripe event](#real-stripe-test-mode-event):** the same 20 → 1 on a Stripe-generated test-mode `payment_intent.succeeded`, replayed inside a CreateOS VM.
-> 4. **[Why the judge can't be fooled](#why-the-judge-cant-be-fooled):** the model never grades itself. The verifier is frozen, hash-pinned, re-measured inside a brand-new VM, and tested against forged verdicts.
-> 5. **[Evidence](evidence/runs/):** receipts from 5/5 real VERIFIED runs, including diffs, agent-written tests and per-case results.
-> 6. **Check it yourself:** `node web/scripts/reverify.mjs evidence/runs/run_9ce5ab644beb2546eb/patch.diff` re-runs the frozen verifier in your own fresh VM.
+> 4. **[Twin-VM experiment](#twin-vm-experiment-pause--fork--resume):** CreateOS pause → fork → resume. In an identical snapshot with identical verifier bytes, only `handler.mjs` differs: **20 fulfillments vs 1**.
+> 5. **[Why the judge can't be fooled](#why-the-judge-cant-be-fooled):** the model never grades itself. The verifier is frozen, hash-pinned, re-measured inside a brand-new VM, and tested against forged verdicts.
+> 6. **[Evidence](evidence/runs/):** receipts from 5/5 real VERIFIED runs, including diffs, agent-written tests and per-case results.
+> 7. **Check it yourself:** `node web/scripts/reverify.mjs evidence/runs/run_9ce5ab644beb2546eb/patch.diff` re-runs the frozen verifier in your own fresh VM.
 
 Webhooks get retried. One payment can trigger the same fulfillment twice — under duplicate delivery, concurrent delivery, or two event IDs for the same order. A happy-path test won't catch it, and an AI-suggested patch is just a suggestion.
 
@@ -124,7 +125,7 @@ Most agent demos let a model, or a second agent, decide whether the fix worked. 
 | Model edits the verifier | It never sees the verifier source, can only write `handler.mjs`, and the verifier's SHA-256 is pinned on the host and **re-measured inside the final VM** | `summary.verifierIntegrity` in every receipt |
 | "It passed in a VM that the model's code had already touched" | The work VM is destroyed. The final verdict runs in a **brand-new VM** holding only the final handler and the frozen verifier | `summary.sandboxes` in every receipt |
 
-**Fresh VM rather than fork, by design.** CreateOS can fork a running sandbox, but a fork copies memory, processes and files that the model's code has already touched. For the verdict we deliberately use a clean VM with nothing inherited.
+**Fresh VM rather than fork, by design.** CreateOS can fork a paused sandbox snapshot (we use exactly that in the [twin-VM experiment](#twin-vm-experiment-pause--fork--resume)), but a fork inherits files and state that the model's code has already touched. For the verdict we deliberately use a clean VM with nothing inherited.
 
 **Exit code and JSON must agree.** A run is VERIFIED only if the verdict JSON parses, all of V1–V6 are present and passing, *and* the process exit code is 0. Anything else is FAILED, INCONCLUSIVE or INFRA_ERROR, and is shown as such.
 
