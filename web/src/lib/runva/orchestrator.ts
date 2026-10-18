@@ -1,8 +1,8 @@
 // RUNVA orchestrator — PRD B4. Host code only hashes, diffs, parses JSON and asserts.
 // Model-generated code is NEVER executed on the host: it is uploaded to and run inside CreateOS sandboxes.
 import { createTwoFilesPatch } from "diff";
-import type { CommandEvidence, EventKind, PatchAttempt, RunStatus, RunSummary, VerifierResult } from "./types";
-import { applyBaselineOverride, loadFixture, type BaselineOverride, type Fixture } from "./fixture";
+import type { CommandEvidence, EventKind, PatchAttempt, RunStatus, RunSummary, ScenarioId, VerifierResult } from "./types";
+import { DEFAULT_SCENARIO_ID, applyBaselineOverride, isScenarioId, loadFixture, scenarioLimits, type BaselineOverride, type Fixture } from "./fixture";
 import { getLlm, type FailureEvidence, type LLMAdapter, type LlmCallMeta } from "./llm";
 import { RunvaError, SandboxSession, classifySandboxError, getSandboxClient } from "./sandbox";
 import { failingCases, hostVerdictPass, parseVerdict } from "./verifier";
@@ -50,10 +50,10 @@ export function unifiedDiff(baseline: string, candidate: string, label = "candid
 
 // ---------------------------------------------------------------- run creation
 
-export function newSummary(runId: string): RunSummary {
+export function newSummary(runId: string, scenarioId: ScenarioId = DEFAULT_SCENARIO_ID): RunSummary {
   return {
     runId,
-    scenarioId: "webhook-idempotency",
+    scenarioId,
     status: "CREATED",
     startedAt: nowIso(),
     contract: "",
@@ -76,18 +76,31 @@ export function newSummary(runId: string): RunSummary {
 /**
  * Optional start input. `baselineOverride` is set ONLY by the CLI (scripts/e2e-run.ts --handler);
  * POST /api/runs never passes it, so the web demo always runs the repo fixture.
+ * `scenarioId` picks one of the host-owned preset fixtures (allowlisted; default webhook-idempotency).
  */
-export type StartRunOptions = { baselineOverride?: BaselineOverride };
+export type StartRunOptions = { baselineOverride?: BaselineOverride; scenarioId?: ScenarioId };
+
+/**
+ * Run time budget for a scenario. An explicit RUNVA_MAX_RUN_MS always wins; otherwise a scenario may
+ * declare a larger default (the durable verifier alone runs ~45s per invocation, three times per run).
+ */
+export function runBudgetMs(scenarioId: ScenarioId): number {
+  const explicit = process.env.RUNVA_MAX_RUN_MS !== undefined && process.env.RUNVA_MAX_RUN_MS !== "";
+  const def = scenarioLimits(scenarioId).defaultMaxRunMs;
+  return !explicit && def ? def : runEnv().maxRunMs;
+}
 
 /** Create + register a run and start orchestration asynchronously. Caller must have passed checkCanStart(). */
 export function startRun(opts: StartRunOptions = {}): { record: RunRecord; done: Promise<void> } {
+  const scenarioId = opts.scenarioId ?? DEFAULT_SCENARIO_ID;
+  if (!isScenarioId(scenarioId)) throw new Error(`unknown scenario id: ${String(scenarioId).slice(0, 80)}`);
   const runId = newRunId();
-  const record: RunRecord = { summary: newSummary(runId), abort: new AbortController(), startedAtMs: Date.now() };
+  const record: RunRecord = { summary: newSummary(runId, scenarioId), abort: new AbortController(), startedAtMs: Date.now() };
   registerRun(record);
   emit(record.summary, "phase", "Run created", {
-    scenarioId: "webhook-idempotency",
+    scenarioId,
     model: record.summary.model,
-    maxRunMs: runEnv().maxRunMs,
+    maxRunMs: runBudgetMs(scenarioId),
     ...(opts.baselineOverride ? { baseline: "user-supplied", baselineLabel: opts.baselineOverride.label } : {}),
   });
   const done = orchestrate(record, opts).catch((e) => {
@@ -116,7 +129,7 @@ export function cancelRun(record: RunRecord): boolean {
 type VerifierRun = VerifierResult & { parseError?: string };
 
 async function runVerifier(S: RunSummary, vm: SandboxSession, label: string, handlerSource: string, fx: Fixture, signal: AbortSignal): Promise<VerifierRun> {
-  const { evidence, stdout } = await vm.node(label, VERIFIER, signal);
+  const { evidence, stdout } = await vm.node(label, VERIFIER, signal, scenarioLimits(fx.scenarioId).verifierTimeoutMs);
   const { verdict, parseError } = parseVerdict(stdout);
   const result: VerifierRun = {
     verdict,
@@ -198,7 +211,9 @@ type Outcome = { status: Exclude<RunStatus, "CREATED">; title: string; error?: R
 async function orchestrate(rec: RunRecord, opts: StartRunOptions = {}): Promise<void> {
   const S = rec.summary;
   const signal = rec.abort.signal;
-  const { maxRunMs, maxRepairRetries } = runEnv();
+  const { maxRepairRetries } = runEnv();
+  const maxRunMs = runBudgetMs(S.scenarioId);
+  const agentTestsLimitMs = scenarioLimits(S.scenarioId).agentTestsTimeoutMs;
   const timer = setTimeout(
     () => rec.abort.abort(new RunvaError("infra", `Run exceeded the ${Math.round(maxRunMs / 1000)}s time budget`, "Raise RUNVA_MAX_RUN_MS or retry; the LLM or CreateOS was slow.")),
     maxRunMs,
@@ -213,16 +228,17 @@ async function orchestrate(rec: RunRecord, opts: StartRunOptions = {}): Promise<
     try {
       fx = await loadFixture(S.scenarioId);
     } catch (e) {
-      throw new RunvaError("infra", `Could not load fixture: ${errMessage(e)}`, "Ensure web/fixtures/webhook-idempotency/ is deployed with the server (outputFileTracingIncludes).");
+      throw new RunvaError("infra", `Could not load fixture: ${errMessage(e)}`, `Ensure web/fixtures/${S.scenarioId}/ is deployed with the server (outputFileTracingIncludes).`);
     }
     // CLI-only: replace the baseline with the user's file (text; hashed here, executed only inside the VM).
     const user = opts.baselineOverride;
     if (user) fx = applyBaselineOverride(fx, user);
     S.contract = fx.scenario.contract;
+    S.scenarioTitle = fx.scenario.title;
     S.baselineSource = fx.handlerSource;
     S.baselineSha256 = fx.handlerSha256;
     S.verifierSha256 = fx.verifierSha256;
-    S.baselineOrigin = { kind: user ? "user" : "fixture", label: user ? user.label : "fixtures/webhook-idempotency/handler.vulnerable.mjs", sha256: fx.handlerSha256, bytes: Buffer.byteLength(fx.handlerSource) };
+    S.baselineOrigin = { kind: user ? "user" : "fixture", label: user ? user.label : `fixtures/${S.scenarioId}/handler.vulnerable.mjs`, sha256: fx.handlerSha256, bytes: Buffer.byteLength(fx.handlerSource) };
     emit(S, "artifact", user ? `Baseline handler.mjs loaded from user-supplied file ${user.label}` : "Baseline handler.mjs loaded", {
       file: "handler.mjs",
       sha256: fx.handlerSha256,
@@ -268,7 +284,7 @@ async function orchestrate(rec: RunRecord, opts: StartRunOptions = {}): Promise<
     phase(S, "BASELINE_RUNNING", user ? "Running the user-supplied baseline in the sandbox" : "Running the vulnerable baseline in the sandbox");
     const bSyntax = await vm.nodeCheck("baseline: syntax check", TARGET, signal);
     emit(S, "command", `Baseline syntax check: exit ${bSyntax.exitCode}`, cmdDetails(bSyntax));
-    const bTests = (await vm.node("baseline: agent tests", AGENT_TESTS, signal)).evidence;
+    const bTests = (await vm.node("baseline: agent tests", AGENT_TESTS, signal, agentTestsLimitMs)).evidence;
     S.baselineAgentTests = bTests;
     emit(S, "command", `Agent tests vs baseline: exit ${bTests.exitCode}${bTests.exitCode !== 0 ? " (failures exposed)" : " (no failure exposed)"}`, cmdDetails(bTests));
     const base = await runVerifier(S, vm, "baseline: frozen verifier", fx.handlerSource, fx, signal);
@@ -341,7 +357,7 @@ async function orchestrate(rec: RunRecord, opts: StartRunOptions = {}): Promise<
         prev = pa;
         continue;
       }
-      const at = (await vm.node(`attempt ${attempt}: agent tests`, AGENT_TESTS, signal)).evidence;
+      const at = (await vm.node(`attempt ${attempt}: agent tests`, AGENT_TESTS, signal, agentTestsLimitMs)).evidence;
       pa.agentTests = at;
       emit(S, "command", `Agent tests vs candidate ${attempt}: exit ${at.exitCode}`, cmdDetails(at, { attempt }));
       const v = await runVerifier(S, vm, `attempt ${attempt}: frozen verifier`, src, fx, signal);

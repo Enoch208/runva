@@ -4,6 +4,11 @@ export const SCOPE =
   "Verified for these synthetic conditions in this sandbox. Not a production guarantee.";
 export const DURABILITY =
   "The fix may use in-memory state and in-flight coordination, which is valid only for this single-process fixture. Production durability requires a transactional/idempotent datastore; passing this fixture is not a guarantee across process crashes, restarts, or multiple service instances.";
+export const DURABILITY_DB =
+  "The fix keeps its idempotency state in a SQLite database file that the frozen verifier shares between several Node processes inside this sandbox, so it was exercised across separate processes and restarts. That is still one machine and one SQLite file: passing this fixture is not a guarantee for other datastores, network partitions, or production load.";
+
+/** Scope note on durability for this run's scenario (webhook-idempotency keeps the original wording). */
+export const durabilityFor = (S: Pick<RunSummary, "scenarioId">): string => (S.scenarioId === "durable-idempotency" ? DURABILITY_DB : DURABILITY);
 
 const fence = (s: string, lang = "") => {
   const body = (s ?? "").replace(/```/g, "ˋˋˋ");
@@ -49,7 +54,7 @@ export function renderReceipt(S: RunSummary): string {
   out.push("## Run");
   out.push(`- Run ID: \`${S.runId}\``);
   out.push(`- Started: ${S.startedAt}${S.finishedAt ? ` · Finished: ${S.finishedAt}` : " · (still running)"}${S.durationMs !== undefined ? ` · Duration: ${(S.durationMs / 1000).toFixed(1)} s` : ""}`);
-  out.push(`- Workflow: \`${S.scenarioId}\` (synthetic Stripe-style events only; no live Stripe API calls)`);
+  out.push(`- Workflow: \`${S.scenarioId}\`${S.scenarioTitle ? ` — ${S.scenarioTitle}` : ""} (synthetic Stripe-style events only; no live Stripe API calls)`);
   out.push(`- Safety contract: ${S.contract || "(not loaded)"}`);
   if (S.baselineOrigin?.kind === "user") out.push(`- Baseline: **user-supplied file** \`${S.baselineOrigin.label}\` (${S.baselineOrigin.bytes} bytes, sha256 \`${S.baselineOrigin.sha256}\`), passed via the CLI \`--handler\` flag; uploaded only into the sandbox, never executed on the host`);
   out.push(`- Final status: **${S.status}**`);
@@ -116,7 +121,7 @@ export function renderReceipt(S: RunSummary): string {
   }
   out.push("## Scope and limitations");
   out.push(`- ${SCOPE}`);
-  out.push(`- ${DURABILITY}`);
+  out.push(`- ${durabilityFor(S)}`);
   out.push("- Hashes identify the exact bytes that ran; they are not cryptographic proof of correct behavior. RUNVA claims only the observed assertions above — not formal verification or universal correctness.");
   out.push("- All model-generated code executed only inside CreateOS sandboxes; the RUNVA host never executed it.");
   out.push("");
@@ -160,6 +165,7 @@ export function buildReceiptJson(S: RunSummary) {
     schema: "runva.receipt.v1" as const,
     runId: S.runId,
     scenarioId: S.scenarioId,
+    scenarioTitle: S.scenarioTitle ?? null,
     contract: S.contract,
     startedAt: S.startedAt,
     finishedAt: S.finishedAt ?? null,
@@ -203,7 +209,7 @@ export function buildReceiptJson(S: RunSummary) {
     })),
     final: { verifier: verdictOf(S.finalResult) },
     scope: SCOPE,
-    durability: DURABILITY,
+    durability: durabilityFor(S),
     hashNote: "Hashes are reproducibility identifiers for the exact bytes that ran, not cryptographic proof of correct behavior.",
     executionBoundary: "All model-generated code executed only inside CreateOS sandboxes; the RUNVA host never executed it.",
   };

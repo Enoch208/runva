@@ -98,9 +98,12 @@ export type GeneratedTests = {
   model: string;
 };
 
+/** Preset scenarios (host-owned fixtures under web/fixtures/<id>/). Additive union. */
+export type ScenarioId = "webhook-idempotency" | "durable-idempotency";
+
 export type RunSummary = {
   runId: string;
-  scenarioId: "webhook-idempotency";
+  scenarioId: ScenarioId;
   status: RunStatus;
   startedAt: string;
   finishedAt?: string;
@@ -136,6 +139,8 @@ export type RunSummary = {
   verifierIntegrity?: { expectedSha256: string; observedSha256: string | null; match: boolean };
   /** Where the baseline handler came from: the repo fixture, or a user file passed to the CLI with --handler (never via the web API). */
   baselineOrigin?: { kind: "fixture" | "user"; label: string; sha256: string; bytes: number };
+  /** Human-readable scenario title from the fixture's scenario.json. */
+  scenarioTitle?: string;
 };
 
 /** additive (backend) */
@@ -150,7 +155,7 @@ export type SandboxRecord = {
 };
 
 /** POST /api/runs body */
-export type StartRunRequest = { scenarioId: "webhook-idempotency"; accessCode?: string };
+export type StartRunRequest = { scenarioId?: ScenarioId; accessCode?: string };
 /** POST /api/runs response (201) — or { error } with 409 busy / 401 bad code / 429 cooldown */
 export type StartRunResponse = { runId: string; status: RunStatus };
 

@@ -212,10 +212,18 @@ export class SandboxSession {
     }
   }
 
-  /** Run `node <file>` from /workspace with an in-VM wall-clock limit (exit 124 on timeout). */
-  async node(label: string, file: string, signal?: AbortSignal): Promise<{ evidence: CommandEvidence; stdout: string }> {
-    const limitSec = Math.round(runEnv().commandTimeoutMs / 1000);
-    return this.execFull(label, `node ${file}`, "sh", ["-c", `cd /workspace && timeout ${limitSec} node ${file}`], { signal });
+  /**
+   * Run `node <file>` from /workspace with an in-VM wall-clock limit (exit 124 on timeout).
+   * `limitMs` overrides the global RUNVA_COMMAND_TIMEOUT_MS for this command (per-scenario budgets).
+   */
+  async node(label: string, file: string, signal?: AbortSignal, limitMs?: number): Promise<{ evidence: CommandEvidence; stdout: string }> {
+    if (limitMs === undefined) {
+      const limitSec = Math.round(runEnv().commandTimeoutMs / 1000);
+      return this.execFull(label, `node ${file}`, "sh", ["-c", `cd /workspace && timeout ${limitSec} node ${file}`], { signal });
+    }
+    // A per-scenario limit can only extend the global one, never shorten it.
+    const limitSec = Math.max(5, Math.round(Math.max(limitMs, runEnv().commandTimeoutMs) / 1000));
+    return this.execFull(label, `node ${file}`, "sh", ["-c", `cd /workspace && timeout ${limitSec} node ${file}`], { signal, timeoutMs: limitSec * 1000 + 15_000 });
   }
 
   async nodeCheck(label: string, file: string, signal?: AbortSignal): Promise<CommandEvidence> {

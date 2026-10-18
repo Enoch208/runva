@@ -83,6 +83,28 @@ const PATCH_RULES = [
   "- Do not try to detect or special-case a test harness. Keep the change small and readable.",
 ].join("\n");
 
+// durable-idempotency: same handler interface, but deps.db is a node:sqlite database shared by several processes.
+const DURABLE_PATCH_RULES = [
+  "Rules for the patch (hard constraints):",
+  "- Return the COMPLETE replacement source of handler.mjs (targetFilename must be exactly \"handler.mjs\"). You may only edit this one file.",
+  "- Keep the exported function name and signature `handleWebhook(event, deps)` and the shape of its return value exactly as in the original. Keep valid-event behavior unchanged.",
+  "- deps = { db, fulfillOrder }. deps.db is a `node:sqlite` DatabaseSync connected to ONE database FILE that is shared by several OS processes running this same module (WAL mode and busy_timeout are already set by the harness). Processes are also restarted between deliveries.",
+  "- Module-level memory (Map, Set, in-flight promises, flags) is NOT shared between processes and does NOT survive a restart, so it cannot provide idempotency. The database is the only shared, durable state: idempotency MUST be enforced in deps.db.",
+  "- Idempotency must hold at the ORDER / business-effect level, not just the event id: two different event ids for the same order must cause ONE fulfillment, across processes and restarts.",
+  "- Create what you need with `CREATE TABLE IF NOT EXISTS` (safe to run from every process on every call) using a distinctively named table with the order id as PRIMARY KEY (or UNIQUE). Never drop, alter or write to tables you did not create.",
+  "- Claim the order ATOMICALLY before calling deps.fulfillOrder, e.g. `INSERT INTO <table>(order_id, ...) VALUES (?, ...) ON CONFLICT DO NOTHING` and proceed only if `.run(...).changes === 1`, or a short `BEGIN IMMEDIATE` … `COMMIT` transaction that checks and inserts. Only the delivery that won the claim may call deps.fulfillOrder. A SELECT-then-INSERT outside a transaction races across processes.",
+  "- Never hold a transaction open across an `await` (fulfillOrder is async; other processes would block or fail with SQLITE_BUSY). Claim in one short statement/transaction, await fulfillOrder outside any transaction, then record completion in another short statement. If you use BEGIN, always COMMIT or ROLLBACK in a finally.",
+  "- Never record the order as completed BEFORE deps.fulfillOrder succeeds. If fulfillOrder throws, release the claim (delete it, or mark it retryable) and report failure (do not swallow the error into a success), so a later retry, possibly in a different process, fulfills exactly once.",
+  "- A delivery that loses the claim (another delivery holds it or already completed it) must not call deps.fulfillOrder; acknowledge it as the invariant describes.",
+  "- DatabaseSync is synchronous: db.exec(sql); db.prepare(sql).run(...params) returns { changes, lastInsertRowid }; .get(...params) returns a row or undefined; .all(...params). Always use bound `?` parameters, never string-concatenate ids into SQL.",
+  "- Unknown event types must not fulfill anything and must not write a claim; acknowledge/ignore them as in the original.",
+  "- Use only deps.db for state: do not open your own database connection, files or paths. Do not add dependencies or imports other than Node built-ins (\"node:*\"). No network, no timers left running, no process.exit, no console noise.",
+  "- Where the invariant above is more specific than these rules (e.g. return values, stale or crashed claims), follow the invariant.",
+  "- Do not try to detect or special-case a test harness. Keep the change small and readable.",
+].join("\n");
+
+const patchRules = (fx: Fixture): string => (fx.scenarioId === "durable-idempotency" ? DURABLE_PATCH_RULES : PATCH_RULES);
+
 function patchSchemaHint(): string {
   return 'Respond with JSON exactly of the form: {"diagnosis": "brief mechanism of the failure", "changeSummary": "what you changed and why", "targetFilename": "handler.mjs", "sourceCode": "<complete replacement module source>"}';
 }
@@ -110,6 +132,34 @@ function evidenceBlock(ev: FailureEvidence): string {
   return parts.join("\n");
 }
 
+const TEST_REQUIREMENTS = [
+  "- Import the target with a relative import: `import { handleWebhook } from \"./target/handler.mjs\";` (it resolves to /workspace/target/handler.mjs). If you need isolated module state per test, use dynamic imports with a unique query string, e.g. `await import(`./target/handler.mjs?t=${n}`)`.",
+  "- Use only Node built-ins (node:assert, node:timers/promises, ...). No npm packages, no network, no file writes.",
+  "- Provide your own fake deps exactly as the interface above describes; make fulfillOrder async with a small delay so overlapping deliveries really overlap (fire them with Promise.all), and record every call.",
+  "- Use unique event ids / order ids per test so tests do not interfere.",
+  "- Probe: the same event delivered many times including concurrently; two different event ids for the same order; an unknown event type; two different orders; fulfillOrder failing once then the event being retried.",
+  "- Catch errors per test so one failure does not hide the others. Print one line per test: `PASS <name>` or `FAIL <name>: <observed vs expected>`, then a summary line.",
+  "- Set process.exitCode = 1 if any test fails, else 0. Finish well within 20 seconds; leave no timers or handles open.",
+  "- Keep it focused and compact: about 5–7 tests, under ~150 lines total, no comments beyond a one-line header.",
+  "- These tests run against the CURRENT (possibly vulnerable) handler first; failing tests there are expected and useful. Do not assume any particular fix.",
+];
+
+const DURABLE_TEST_REQUIREMENTS = [
+  "- Import the target with a relative import: `import { handleWebhook } from \"./target/handler.mjs\";` (it resolves to /workspace/target/handler.mjs).",
+  "- Build your OWN database for every test: `import { DatabaseSync } from \"node:sqlite\";` create a fresh directory with `mkdtempSync(join(tmpdir(), \"agent-\"))` (node:fs, node:os, node:path), open `new DatabaseSync(file)` and run `db.exec(\"PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;\")`. Pass deps = { db, fulfillOrder }. Write files ONLY inside those temp directories; close every DatabaseSync when done.",
+  "- Module memory is per process, so the important probes must use SEPARATE OS processes sharing one db file. Re-run this same file as a child: `spawn(process.execPath, [\"--no-warnings\", fileURLToPath(import.meta.url), \"child\", <json args>])` (node:child_process, node:url); when `process.argv[2] === \"child\"`, open its own DatabaseSync on the given file (same PRAGMAs), import the handler, perform the delivery and print one JSON result line, then close the db. Await each child's exit; kill any child that runs longer than 15s.",
+  "- Make fulfillments visible across processes: fulfillOrder should `await` a small delay (~100–300 ms) so deliveries overlap, then (if it is not meant to fail) INSERT a row into your own table, e.g. `agent_fulfillments(order_id TEXT, pid INTEGER)`, created by the parent before spawning. Count rows in the parent. To make concurrent children really overlap, pass a common start timestamp (now + ~800 ms) and have each child wait until then before calling handleWebhook.",
+  "- Use only Node built-ins, always with the `node:` prefix (node:sqlite, node:child_process, node:fs, node:os, node:path, node:url, node:assert, node:timers/promises). No npm packages, no network.",
+  "- Use unique event ids / order ids per test so tests do not interfere.",
+  "- Probe: the same event delivered by several (3–5) concurrent processes sharing one db file → exactly one fulfillment; two different event ids for the same order in different processes → one fulfillment; a restart (a NEW process receives a duplicate after another process already fulfilled the order) → no second fulfillment; fulfillOrder failing in one process, then the event retried in a new process → that delivery reports failure and the retry fulfills exactly once; an unknown event type → ignored, nothing fulfilled.",
+  "- Catch errors per test so one failure does not hide the others. Print one line per test: `PASS <name>` or `FAIL <name>: <observed vs expected>`, then a summary line.",
+  "- Set process.exitCode = 1 if any test fails, else 0. The sandbox has 1 vCPU and each node child takes a few hundred ms to start: keep the total under ~40 seconds; leave no timers, handles or child processes behind.",
+  "- Keep it focused and compact: about 5–7 tests, under ~200 lines total, no comments beyond a one-line header.",
+  "- These tests run against the CURRENT (possibly vulnerable) handler first; failing tests there are expected and useful. Do not assume any particular fix.",
+];
+
+const testRequirements = (fx: Fixture): string[] => (fx.scenarioId === "durable-idempotency" ? DURABLE_TEST_REQUIREMENTS : TEST_REQUIREMENTS);
+
 function testsPrompt(fx: Fixture): string {
   return [
     fixtureContext(fx),
@@ -117,15 +167,7 @@ function testsPrompt(fx: Fixture): string {
     "## Task: write adversarial tests",
     "Write ONE complete, runnable Node.js (v24) ES module that will be saved as /workspace/agent-tests.mjs and run with `cd /workspace && node agent-tests.mjs`.",
     "Requirements:",
-    "- Import the target with a relative import: `import { handleWebhook } from \"./target/handler.mjs\";` (it resolves to /workspace/target/handler.mjs). If you need isolated module state per test, use dynamic imports with a unique query string, e.g. `await import(`./target/handler.mjs?t=${n}`)`.",
-    "- Use only Node built-ins (node:assert, node:timers/promises, ...). No npm packages, no network, no file writes.",
-    "- Provide your own fake deps exactly as the interface above describes; make fulfillOrder async with a small delay so overlapping deliveries really overlap (fire them with Promise.all), and record every call.",
-    "- Use unique event ids / order ids per test so tests do not interfere.",
-    "- Probe: the same event delivered many times including concurrently; two different event ids for the same order; an unknown event type; two different orders; fulfillOrder failing once then the event being retried.",
-    "- Catch errors per test so one failure does not hide the others. Print one line per test: `PASS <name>` or `FAIL <name>: <observed vs expected>`, then a summary line.",
-    "- Set process.exitCode = 1 if any test fails, else 0. Finish well within 20 seconds; leave no timers or handles open.",
-    "- Keep it focused and compact: about 5–7 tests, under ~150 lines total, no comments beyond a one-line header.",
-    "- These tests run against the CURRENT (possibly vulnerable) handler first; failing tests there are expected and useful. Do not assume any particular fix.",
+    ...testRequirements(fx),
     "",
     'Respond with JSON exactly of the form: {"summary": "what failure these tests try to expose", "testFilename": "agent-tests.mjs", "testCode": "<complete module source>"}',
   ].join("\n");
@@ -139,7 +181,7 @@ function patchPrompt(fx: Fixture, ev: FailureEvidence): string {
     "",
     "## Task: produce a minimal patch for handler.mjs",
     "The evidence above comes from REAL executions in an isolated CreateOS sandbox. An independent frozen verifier (which you cannot see or edit) will judge your patch against the invariant.",
-    PATCH_RULES,
+    patchRules(fx),
     "",
     patchSchemaHint(),
   ].join("\n");
@@ -164,7 +206,7 @@ function repairPrompt(
     "",
     "## Task: repair the candidate",
     "Analyze why the previous candidate failed using the real evidence above, then return a corrected COMPLETE handler.mjs. It must differ from the previous candidate.",
-    PATCH_RULES,
+    patchRules(fx),
     "",
     patchSchemaHint(),
   ].join("\n");
@@ -198,7 +240,9 @@ const byteLen = (s: string) => Buffer.byteLength(s, "utf8");
 
 function disallowedImports(code: string): string[] {
   const specs = [...code.matchAll(/(?:import\s[^'"]*?from\s*|import\s*\(\s*|import\s+|require\s*\(\s*)["'`]([^"'`]+)["'`]/g)].map((m) => m[1]);
-  return specs.filter((s) => !s.startsWith("node:") && !s.startsWith("./") && !s.startsWith("../") && !["assert", "events", "timers", "timers/promises", "util", "crypto", "async_hooks", "perf_hooks"].includes(s));
+  // node:sqlite (and every other "node:*" built-in) is accepted by the prefix rule; sqlite has no bare alias.
+  const bareBuiltins = ["assert", "events", "timers", "timers/promises", "util", "crypto", "async_hooks", "perf_hooks", "child_process", "fs", "fs/promises", "os", "path", "url"];
+  return specs.filter((s) => !s.startsWith("node:") && !s.startsWith("./") && !s.startsWith("../") && !bareBuiltins.includes(s));
 }
 
 export function validateTests(raw: unknown): TestsOutput {

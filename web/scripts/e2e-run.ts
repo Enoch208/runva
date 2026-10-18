@@ -3,17 +3,28 @@
 //   set -a; . ../.env; set +a; NODE_OPTIONS=--conditions=import pnpm dlx tsx scripts/e2e-run.ts --baseline  # sandbox + frozen verifier on baseline only (no LLM)
 //   ... scripts/e2e-run.ts --handler path/to/handler.mjs  # bring your own handler: it replaces handler.vulnerable.mjs as the baseline
 //       (read as text, hashed, uploaded only into the sandbox; the host never imports or runs it. Same contract: handleWebhook(event, deps).)
+//   ... scripts/e2e-run.ts --scenario durable-idempotency  # pick a preset fixture (default webhook-idempotency); combines with --repeat/--baseline/--handler
 // (--conditions=import is required because the CreateOS SDK is ESM-only and tsx loads these .ts files as CJS.)
 // Prints the live timeline, then a summary. Always exits (the SDK can keep a handle open).
-import { startRun } from "../src/lib/runva/orchestrator";
+import { runBudgetMs, startRun } from "../src/lib/runva/orchestrator";
 import { checkCanStart } from "../src/lib/runva/run-store";
 import { SandboxSession, listSandboxesBounded } from "../src/lib/runva/sandbox";
-import { MAX_BASELINE_BYTES, applyBaselineOverride, loadFixture, validateBaselineOverride, type BaselineOverride } from "../src/lib/runva/fixture";
+import {
+  DEFAULT_SCENARIO_ID,
+  MAX_BASELINE_BYTES,
+  SCENARIO_IDS,
+  applyBaselineOverride,
+  isScenarioId,
+  loadFixture,
+  scenarioLimits,
+  validateBaselineOverride,
+  type BaselineOverride,
+} from "../src/lib/runva/fixture";
 import { parseVerdict, hostVerdictPass } from "../src/lib/runva/verifier";
 import { llmEnv, sandboxEnv } from "../src/lib/runva/env";
 import { buildReceiptJson, renderPatchFile, renderReceipt } from "../src/lib/runva/receipt";
 import { redact } from "../src/lib/runva/util";
-import type { RunEvent, RunSummary } from "../src/lib/runva/types";
+import type { RunEvent, RunSummary, ScenarioId } from "../src/lib/runva/types";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -39,6 +50,16 @@ function userBaseline(): BaselineOverride | undefined {
   return validateBaselineOverride(readFileSync(abs, "utf8"), label);
 }
 let USER_BASELINE: BaselineOverride | undefined; // set in main()
+
+/** --scenario <id>: one of the preset fixtures (allowlisted). */
+function scenarioArg(): ScenarioId {
+  const i = process.argv.indexOf("--scenario");
+  if (i < 0) return DEFAULT_SCENARIO_ID;
+  const arg = process.argv[i + 1];
+  if (!isScenarioId(arg)) throw new Error(`--scenario must be one of: ${SCENARIO_IDS.join(", ")}`);
+  return arg;
+}
+let SCENARIO: ScenarioId = DEFAULT_SCENARIO_ID; // set in main()
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`.padStart(7);
 
 function printEvent(e: RunEvent) {
@@ -61,9 +82,9 @@ async function cleanupCheck() {
 }
 
 async function baselineOnly() {
-  let fx = await loadFixture();
+  let fx = await loadFixture(SCENARIO);
   if (USER_BASELINE) fx = applyBaselineOverride(fx, USER_BASELINE);
-  console.log(`fixture loaded${USER_BASELINE ? ` (baseline = user file ${USER_BASELINE.label})` : ""}: baseline sha256=${fx.handlerSha256.slice(0, 16)}… verifier sha256=${fx.verifierSha256.slice(0, 16)}…`);
+  console.log(`fixture ${SCENARIO} loaded${USER_BASELINE ? ` (baseline = user file ${USER_BASELINE.label})` : ""}: baseline sha256=${fx.handlerSha256.slice(0, 16)}… verifier sha256=${fx.verifierSha256.slice(0, 16)}…`);
   const vm = await SandboxSession.create("run_e2ebaseline", "work");
   console.log(`${el()} sandbox ${vm.shortId} created in ${vm.createMs}ms (shape=${vm.shape} region=${vm.region} egress=${vm.egress.join(",")})`);
   try {
@@ -75,7 +96,7 @@ async function baselineOnly() {
     console.log(`${el()} egress check: curl exit ${eg.exitCode} → ${eg.exitCode !== 0 ? "BLOCKED" : "NOT BLOCKED"} ${eg.stderr.trim().slice(0, 120)}`);
     const syn = await vm.nodeCheck("syntax", "/workspace/target/handler.mjs");
     console.log(`${el()} node --check baseline: exit ${syn.exitCode}`);
-    const { evidence, stdout } = await vm.node("baseline verifier", "/workspace/verification.mjs");
+    const { evidence, stdout } = await vm.node("baseline verifier", "/workspace/verification.mjs", undefined, scenarioLimits(SCENARIO).verifierTimeoutMs);
     const { verdict, parseError } = parseVerdict(stdout);
     console.log(`${el()} frozen verifier on baseline: exit ${evidence.exitCode} execMs=${evidence.execMs} parsed=${!!verdict}${parseError ? " (" + parseError + ")" : ""}`);
     for (const c of verdict?.cases ?? []) console.log(`        ${c.id} ${c.pass ? "PASS" : "FAIL"}  observed=${JSON.stringify(c.observed)} expected=${JSON.stringify(c.expected)}`);
@@ -112,6 +133,7 @@ const v1 = (r: RunSummary["baselineResult"]) => {
 function metrics(S: RunSummary) {
   return {
     runId: S.runId,
+    scenario: S.scenarioId,
     status: S.status,
     baseline: S.baselineOrigin ? `${S.baselineOrigin.kind}:${S.baselineOrigin.label}` : null,
     attempts: S.attemptCount,
@@ -132,7 +154,7 @@ async function full(): Promise<RunSummary> {
     gate = checkCanStart(process.env.RUNVA_ACCESS_CODE);
   }
   if (!gate.ok) throw new Error(gate.error);
-  const { record, done } = startRun({ baselineOverride: USER_BASELINE });
+  const { record, done } = startRun({ baselineOverride: USER_BASELINE, scenarioId: SCENARIO });
   let seen = 0;
   const tick = setInterval(() => {
     for (const e of record.summary.events.slice(seen)) printEvent(e);
@@ -147,6 +169,8 @@ async function full(): Promise<RunSummary> {
     JSON.stringify(
       {
         runId: S.runId,
+        scenarioId: S.scenarioId,
+        scenarioTitle: S.scenarioTitle,
         status: S.status,
         durationMs: S.durationMs,
         model: S.model,
@@ -174,6 +198,8 @@ async function main() {
   const sb = sandboxEnv();
   const llm = llmEnv();
   USER_BASELINE = userBaseline();
+  SCENARIO = scenarioArg();
+  console.log(`scenario: ${SCENARIO} (run budget ${Math.round(runBudgetMs(SCENARIO) / 1000)}s)`);
   if (USER_BASELINE) console.log(`baseline: user-supplied ${USER_BASELINE.label} (${Buffer.byteLength(USER_BASELINE.source)} bytes) — text only, uploaded to the sandbox, never run on this host`);
   console.log(`config: sandboxKey=${sb.apiKeySource ?? "MISSING"} baseUrl=${sb.baseUrl} shape=${sb.shape} egress=${sb.egress.join(",")} llm=${llm.provider}:${llm.model} freshVerifierVm=${sb.freshVerifierVm}`);
   const ri = process.argv.indexOf("--repeat");

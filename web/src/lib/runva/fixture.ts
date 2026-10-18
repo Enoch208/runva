@@ -1,10 +1,45 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { sha256 } from "./util";
+import type { ScenarioId } from "./types";
 
 export type Scenario = { id: string; title: string; contract: string; [k: string]: unknown };
 
+// ---------------------------------------------------------------- preset scenarios (allowlist)
+
+/** The ONLY scenario ids the host will load. Anything else is rejected before touching the filesystem. */
+export const SCENARIO_IDS = ["webhook-idempotency", "durable-idempotency"] as const satisfies readonly ScenarioId[];
+export const DEFAULT_SCENARIO_ID: ScenarioId = "webhook-idempotency";
+
+export function isScenarioId(x: unknown): x is ScenarioId {
+  return typeof x === "string" && (SCENARIO_IDS as readonly string[]).includes(x);
+}
+
+/**
+ * Host-owned per-scenario execution limits. `undefined` means "use the global runEnv() default",
+ * which keeps webhook-idempotency exactly as before. The durable verifier spawns several node
+ * processes inside the VM (up to ~45s), so it gets a much larger in-VM wall clock.
+ */
+export type ScenarioLimits = { verifierTimeoutMs?: number; agentTestsTimeoutMs?: number; defaultMaxRunMs?: number };
+
+const SCENARIO_LIMITS: Record<ScenarioId, ScenarioLimits> = {
+  "webhook-idempotency": {},
+  "durable-idempotency": { verifierTimeoutMs: 120_000, agentTestsTimeoutMs: 90_000, defaultMaxRunMs: 720_000 },
+};
+
+export function scenarioLimits(id: ScenarioId): ScenarioLimits {
+  return SCENARIO_LIMITS[id];
+}
+
+// Statically scoped paths (cwd = web/), one literal per preset, so Next's file tracing stays inside fixtures/.
+const FIXTURE_DIRS: Record<ScenarioId, () => string> = {
+  "webhook-idempotency": () => path.join(process.cwd(), "fixtures", "webhook-idempotency"),
+  "durable-idempotency": () => path.join(process.cwd(), "fixtures", "durable-idempotency"),
+};
+
 export type Fixture = {
+  /** The preset this fixture was loaded for (always one of SCENARIO_IDS). */
+  scenarioId: ScenarioId;
   scenario: Scenario;
   handlerSource: string;
   handlerSha256: string;
@@ -13,11 +48,11 @@ export type Fixture = {
   invariant: string;
 };
 
-// Statically scoped path (cwd = web/) so Next's file tracing only includes fixtures/webhook-idempotency.
-const fixtureFile = (name: string) => path.join(process.cwd(), "fixtures", "webhook-idempotency", name);
-
 /** Load the host-owned fixture from disk. The verifier is frozen here: its hash is taken before any LLM call. */
-export async function loadFixture(scenarioId = "webhook-idempotency"): Promise<Fixture> {
+export async function loadFixture(scenarioId: ScenarioId = DEFAULT_SCENARIO_ID): Promise<Fixture> {
+  if (!isScenarioId(scenarioId)) throw new Error(`unknown scenario id: ${JSON.stringify(String(scenarioId)).slice(0, 80)}`);
+  const dir = FIXTURE_DIRS[scenarioId]();
+  const fixtureFile = (name: string) => path.join(dir, name);
   const [handlerSource, verifierSource, invariant, scenarioRaw] = await Promise.all([
     readFile(fixtureFile("handler.vulnerable.mjs"), "utf8"),
     readFile(fixtureFile("verifier.mjs"), "utf8"),
@@ -34,6 +69,7 @@ export async function loadFixture(scenarioId = "webhook-idempotency"): Promise<F
     ),
   };
   return {
+    scenarioId,
     scenario,
     handlerSource,
     handlerSha256: sha256(handlerSource),
