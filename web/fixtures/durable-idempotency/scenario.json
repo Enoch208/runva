@@ -1,0 +1,33 @@
+{
+  "id": "durable-idempotency",
+  "title": "Multi-process payment webhook on SQLite: fulfill each paid order exactly once, across restarts",
+  "contract": "One paid order leads to exactly one fulfillment, even when the webhook is delivered concurrently to several worker processes sharing one SQLite database, redelivered after a process restart, or sent under a different event ID; a failed fulfillment is never marked complete and can be retried by another process.",
+  "language": "javascript (ESM, Node 24, built-ins only incl. node:sqlite)",
+  "targetFile": "handler.mjs",
+  "files": {
+    "baseline": "handler.vulnerable.mjs",
+    "verifier": "verifier.mjs",
+    "invariant": "invariant.md"
+  },
+  "sandbox": {
+    "handlerPath": "/workspace/target/handler.mjs",
+    "verifierPath": "/workspace/verification.mjs",
+    "command": "node /workspace/verification.mjs"
+  },
+  "interface": "export async function handleWebhook(event, deps) -> Promise<{ ok: boolean, action: \"fulfilled\" | \"duplicate\" | \"ignored\" }>; deps = { db: DatabaseSync from node:sqlite, open on a database file shared by several worker processes (journal_mode=WAL, busy_timeout=5000 already set; the handler owns its schema), fulfillOrder: async (orderId: string) => void (may throw) }; each worker process imports handler.mjs fresh, so module memory is not shared across processes or restarts",
+  "eventExample": {
+    "id": "evt_demo_001",
+    "type": "payment_intent.succeeded",
+    "data": { "object": { "id": "pi_demo_001", "metadata": { "order_id": "order_demo_001" } } }
+  },
+  "cases": [
+    { "id": "V1", "title": "20 deliveries across 4 concurrent worker processes fulfill the order once" },
+    { "id": "V2", "title": "Redelivery after a process restart (same and different event ID) does not fulfill again" },
+    { "id": "V3", "title": "Unknown and non-paid event types are acknowledged and ignored" },
+    { "id": "V4", "title": "Two different orders delivered from 2 processes are each fulfilled exactly once" },
+    { "id": "V5", "title": "Failed fulfillment is not marked complete; a new process retries it exactly once" },
+    { "id": "V6", "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db" }
+  ],
+  "expectedBaseline": { "failing": ["V1"], "passing": ["V2", "V3", "V4", "V5", "V6"] },
+  "scope": "Verified for these synthetic conditions in this sandbox (separate worker processes sharing one SQLite file per case). Not a production guarantee."
+}
