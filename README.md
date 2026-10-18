@@ -186,6 +186,27 @@ set -a; . ./.env; set +a   # CREATEOS_SANDBOX_API_KEY
 node web/scripts/twin-vm.mjs
 ```
 
+## Bring your own handler
+
+The CLI can run the full autonomous loop against your own webhook handler instead of the bundled `handler.vulnerable.mjs`. The loop is the same: the LLM writes tests, CreateOS runs the baseline, the model patches and repairs, and the frozen verifier judges in a fresh VM. Your file becomes the baseline. The verifier, the invariant and the pinned verifier hash don't change.
+
+```bash
+cd web
+set -a; . ../.env; set +a   # CREATEOS_SANDBOX_API_KEY + OPENROUTER_API_KEY
+NODE_OPTIONS=--conditions=import pnpm dlx tsx scripts/e2e-run.ts --handler path/to/your-handler.mjs
+```
+
+The handler has to follow the contract that the frozen verifier V1–V6 encodes (see [`invariant.md`](web/fixtures/webhook-idempotency/invariant.md)):
+
+- `export async function handleWebhook(event, deps)` resolves `{ ok, action: "fulfilled" | "duplicate" | "ignored" }`.
+- `deps.fulfillOrder(orderId)` is async and may throw. The order id is at `event.data.object.metadata.order_id`.
+- Only `payment_intent.succeeded` fulfills. Other event types are acknowledged as `ignored`.
+- It must be one ES module that uses only Node built-ins. Before any VM is created, the CLI checks that the file exists, is at most 40 KB and contains `handleWebhook`.
+
+**Example run.** [`web/examples/handlers/orders-db-handler.mjs`](web/examples/handlers/orders-db-handler.mjs) is a second, differently written vulnerable handler. It keeps an in-memory orders table, skips orders whose status is already `fulfilled`, and only sets that status after `fulfillOrder` succeeds. It looks idempotent, but the check and the write sit on either side of an `await`. Run `run_8dafcc4d7b6739ea49` ended **VERIFIED** in 55.1 s with 1 patch attempt. On the baseline, V1 fulfilled the order **20** times and V2 fulfilled it **2** times, while V3–V6 passed. The model's patch adds a per-order in-flight promise and makes the check-and-register step synchronous. In a fresh VM it passed 6/6 with **1** fulfillment, and the verifier sha256 measured inside that VM matched the pinned hash. `summary.json` and `receipt.json` record `baselineOrigin: { kind: "user", label, sha256, bytes }`. Evidence: [`evidence/runs/run_8dafcc4d7b6739ea49/`](evidence/runs/run_8dafcc4d7b6739ea49/). No fixed version of the example exists in the repo; the fix comes from the model.
+
+**Security.** The web demo never accepts uploaded code: `POST /api/runs` takes only `{ scenarioId, accessCode }`, and only the CLI flag can set a custom baseline. The CLI reads your file as text, hashes it and uploads it only into the CreateOS sandbox. The host never imports or runs it.
+
 ## Verify it yourself
 
 ```bash

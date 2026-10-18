@@ -1,21 +1,44 @@
 // RUNVA end-to-end run from the CLI (no Next server). Usage, from web/:
 //   set -a; . ../.env; set +a; NODE_OPTIONS=--conditions=import pnpm dlx tsx scripts/e2e-run.ts             # full run
 //   set -a; . ../.env; set +a; NODE_OPTIONS=--conditions=import pnpm dlx tsx scripts/e2e-run.ts --baseline  # sandbox + frozen verifier on baseline only (no LLM)
+//   ... scripts/e2e-run.ts --handler path/to/handler.mjs  # bring your own handler: it replaces handler.vulnerable.mjs as the baseline
+//       (read as text, hashed, uploaded only into the sandbox; the host never imports or runs it. Same contract: handleWebhook(event, deps).)
 // (--conditions=import is required because the CreateOS SDK is ESM-only and tsx loads these .ts files as CJS.)
 // Prints the live timeline, then a summary. Always exits (the SDK can keep a handle open).
 import { startRun } from "../src/lib/runva/orchestrator";
 import { checkCanStart } from "../src/lib/runva/run-store";
 import { SandboxSession, listSandboxesBounded } from "../src/lib/runva/sandbox";
-import { loadFixture } from "../src/lib/runva/fixture";
+import { MAX_BASELINE_BYTES, applyBaselineOverride, loadFixture, validateBaselineOverride, type BaselineOverride } from "../src/lib/runva/fixture";
 import { parseVerdict, hostVerdictPass } from "../src/lib/runva/verifier";
 import { llmEnv, sandboxEnv } from "../src/lib/runva/env";
 import { buildReceiptJson, renderPatchFile, renderReceipt } from "../src/lib/runva/receipt";
 import { redact } from "../src/lib/runva/util";
 import type { RunEvent, RunSummary } from "../src/lib/runva/types";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const t0 = Date.now();
+
+/** --handler <path>: load a user-supplied baseline as TEXT (never imported/executed here). */
+function userBaseline(): BaselineOverride | undefined {
+  const i = process.argv.indexOf("--handler");
+  if (i < 0) return undefined;
+  const arg = process.argv[i + 1];
+  if (!arg || arg.startsWith("--")) throw new Error("--handler needs a path to a .mjs file");
+  const abs = path.resolve(process.cwd(), arg);
+  let st;
+  try {
+    st = statSync(abs);
+  } catch {
+    throw new Error(`--handler: file not found: ${arg}`);
+  }
+  if (!st.isFile()) throw new Error(`--handler: not a regular file: ${arg}`);
+  if (st.size > MAX_BASELINE_BYTES) throw new Error(`--handler: ${arg} is ${st.size} bytes; the limit is ${MAX_BASELINE_BYTES} bytes`);
+  const rel = path.relative(process.cwd(), abs);
+  const label = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : path.basename(abs);
+  return validateBaselineOverride(readFileSync(abs, "utf8"), label);
+}
+let USER_BASELINE: BaselineOverride | undefined; // set in main()
 const el = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`.padStart(7);
 
 function printEvent(e: RunEvent) {
@@ -38,8 +61,9 @@ async function cleanupCheck() {
 }
 
 async function baselineOnly() {
-  const fx = await loadFixture();
-  console.log(`fixture loaded: baseline sha256=${fx.handlerSha256.slice(0, 16)}… verifier sha256=${fx.verifierSha256.slice(0, 16)}…`);
+  let fx = await loadFixture();
+  if (USER_BASELINE) fx = applyBaselineOverride(fx, USER_BASELINE);
+  console.log(`fixture loaded${USER_BASELINE ? ` (baseline = user file ${USER_BASELINE.label})` : ""}: baseline sha256=${fx.handlerSha256.slice(0, 16)}… verifier sha256=${fx.verifierSha256.slice(0, 16)}…`);
   const vm = await SandboxSession.create("run_e2ebaseline", "work");
   console.log(`${el()} sandbox ${vm.shortId} created in ${vm.createMs}ms (shape=${vm.shape} region=${vm.region} egress=${vm.egress.join(",")})`);
   try {
@@ -89,6 +113,7 @@ function metrics(S: RunSummary) {
   return {
     runId: S.runId,
     status: S.status,
+    baseline: S.baselineOrigin ? `${S.baselineOrigin.kind}:${S.baselineOrigin.label}` : null,
     attempts: S.attemptCount,
     durationMs: S.durationMs,
     vmCreateMs: (S.sandboxes ?? []).map((s) => `${s.purpose}:${s.createMs}`).join(" "),
@@ -107,7 +132,7 @@ async function full(): Promise<RunSummary> {
     gate = checkCanStart(process.env.RUNVA_ACCESS_CODE);
   }
   if (!gate.ok) throw new Error(gate.error);
-  const { record, done } = startRun();
+  const { record, done } = startRun({ baselineOverride: USER_BASELINE });
   let seen = 0;
   const tick = setInterval(() => {
     for (const e of record.summary.events.slice(seen)) printEvent(e);
@@ -126,6 +151,7 @@ async function full(): Promise<RunSummary> {
         durationMs: S.durationMs,
         model: S.model,
         credentialSource: S.credentialSource,
+        baselineOrigin: S.baselineOrigin,
         sandboxes: S.sandboxes,
         egressBlocked: S.egressCheck?.blocked,
         baselineVerifier: S.baselineResult && { exit: S.baselineResult.exitCode, failing: S.baselineResult.verdict?.cases.filter((c) => !c.pass).map((c) => c.id) },
@@ -147,6 +173,8 @@ async function full(): Promise<RunSummary> {
 async function main() {
   const sb = sandboxEnv();
   const llm = llmEnv();
+  USER_BASELINE = userBaseline();
+  if (USER_BASELINE) console.log(`baseline: user-supplied ${USER_BASELINE.label} (${Buffer.byteLength(USER_BASELINE.source)} bytes) — text only, uploaded to the sandbox, never run on this host`);
   console.log(`config: sandboxKey=${sb.apiKeySource ?? "MISSING"} baseUrl=${sb.baseUrl} shape=${sb.shape} egress=${sb.egress.join(",")} llm=${llm.provider}:${llm.model} freshVerifierVm=${sb.freshVerifierVm}`);
   const ri = process.argv.indexOf("--repeat");
   const repeat = ri > 0 ? Math.max(1, Math.min(5, Number(process.argv[ri + 1]) || 1)) : 1;

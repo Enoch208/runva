@@ -2,7 +2,7 @@
 // Model-generated code is NEVER executed on the host: it is uploaded to and run inside CreateOS sandboxes.
 import { createTwoFilesPatch } from "diff";
 import type { CommandEvidence, EventKind, PatchAttempt, RunStatus, RunSummary, VerifierResult } from "./types";
-import { loadFixture, type Fixture } from "./fixture";
+import { applyBaselineOverride, loadFixture, type BaselineOverride, type Fixture } from "./fixture";
 import { getLlm, type FailureEvidence, type LLMAdapter, type LlmCallMeta } from "./llm";
 import { RunvaError, SandboxSession, classifySandboxError, getSandboxClient } from "./sandbox";
 import { failingCases, hostVerdictPass, parseVerdict } from "./verifier";
@@ -73,13 +73,24 @@ export function newSummary(runId: string): RunSummary {
   };
 }
 
+/**
+ * Optional start input. `baselineOverride` is set ONLY by the CLI (scripts/e2e-run.ts --handler);
+ * POST /api/runs never passes it, so the web demo always runs the repo fixture.
+ */
+export type StartRunOptions = { baselineOverride?: BaselineOverride };
+
 /** Create + register a run and start orchestration asynchronously. Caller must have passed checkCanStart(). */
-export function startRun(): { record: RunRecord; done: Promise<void> } {
+export function startRun(opts: StartRunOptions = {}): { record: RunRecord; done: Promise<void> } {
   const runId = newRunId();
   const record: RunRecord = { summary: newSummary(runId), abort: new AbortController(), startedAtMs: Date.now() };
   registerRun(record);
-  emit(record.summary, "phase", "Run created", { scenarioId: "webhook-idempotency", model: record.summary.model, maxRunMs: runEnv().maxRunMs });
-  const done = orchestrate(record).catch((e) => {
+  emit(record.summary, "phase", "Run created", {
+    scenarioId: "webhook-idempotency",
+    model: record.summary.model,
+    maxRunMs: runEnv().maxRunMs,
+    ...(opts.baselineOverride ? { baseline: "user-supplied", baselineLabel: opts.baselineOverride.label } : {}),
+  });
+  const done = orchestrate(record, opts).catch((e) => {
     // orchestrate() handles its own errors; this is a last-resort guard so a bug never leaves a run hanging.
     const S = record.summary;
     if (!S.finishedAt) {
@@ -184,7 +195,7 @@ async function destroyVm(S: RunSummary, vm: SandboxSession): Promise<void> {
 
 type Outcome = { status: Exclude<RunStatus, "CREATED">; title: string; error?: RunSummary["error"] };
 
-async function orchestrate(rec: RunRecord): Promise<void> {
+async function orchestrate(rec: RunRecord, opts: StartRunOptions = {}): Promise<void> {
   const S = rec.summary;
   const signal = rec.abort.signal;
   const { maxRunMs, maxRepairRetries } = runEnv();
@@ -204,11 +215,21 @@ async function orchestrate(rec: RunRecord): Promise<void> {
     } catch (e) {
       throw new RunvaError("infra", `Could not load fixture: ${errMessage(e)}`, "Ensure web/fixtures/webhook-idempotency/ is deployed with the server (outputFileTracingIncludes).");
     }
+    // CLI-only: replace the baseline with the user's file (text; hashed here, executed only inside the VM).
+    const user = opts.baselineOverride;
+    if (user) fx = applyBaselineOverride(fx, user);
     S.contract = fx.scenario.contract;
     S.baselineSource = fx.handlerSource;
     S.baselineSha256 = fx.handlerSha256;
     S.verifierSha256 = fx.verifierSha256;
-    emit(S, "artifact", "Baseline handler.mjs loaded", { file: "handler.mjs", sha256: fx.handlerSha256, bytes: Buffer.byteLength(fx.handlerSource), lines: fx.handlerSource.split("\n").length });
+    S.baselineOrigin = { kind: user ? "user" : "fixture", label: user ? user.label : "fixtures/webhook-idempotency/handler.vulnerable.mjs", sha256: fx.handlerSha256, bytes: Buffer.byteLength(fx.handlerSource) };
+    emit(S, "artifact", user ? `Baseline handler.mjs loaded from user-supplied file ${user.label}` : "Baseline handler.mjs loaded", {
+      file: "handler.mjs",
+      sha256: fx.handlerSha256,
+      bytes: Buffer.byteLength(fx.handlerSource),
+      lines: fx.handlerSource.split("\n").length,
+      ...(user ? { origin: "user", label: user.label } : {}),
+    });
     emit(S, "artifact", "Frozen verifier hashed (agent cannot see or edit it)", { file: "verification.mjs", sha256: fx.verifierSha256, bytes: Buffer.byteLength(fx.verifierSource), cases: ["V1", "V2", "V3", "V4", "V5", "V6"] });
 
     // Preflight both providers before spending anything (throws a classified RunvaError with a hint).
@@ -244,7 +265,7 @@ async function orchestrate(rec: RunRecord): Promise<void> {
     emit(S, "command", eg.exitCode !== 0 ? `Egress blocked: example.com unreachable from sandbox (curl exit ${eg.exitCode})` : "WARNING: sandbox reached example.com — egress not restricted", cmdDetails(eg, { blocked: eg.exitCode !== 0, allowlist: vm.egress }));
 
     // ---- BASELINE_RUNNING
-    phase(S, "BASELINE_RUNNING", "Running the vulnerable baseline in the sandbox");
+    phase(S, "BASELINE_RUNNING", user ? "Running the user-supplied baseline in the sandbox" : "Running the vulnerable baseline in the sandbox");
     const bSyntax = await vm.nodeCheck("baseline: syntax check", TARGET, signal);
     emit(S, "command", `Baseline syntax check: exit ${bSyntax.exitCode}`, cmdDetails(bSyntax));
     const bTests = (await vm.node("baseline: agent tests", AGENT_TESTS, signal)).evidence;

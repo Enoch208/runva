@@ -134,6 +134,8 @@ export type RunSummary = {
   freshVerifierVm?: boolean;
   /** sha256 of /workspace/verification.mjs measured INSIDE the final VM vs the host-frozen hash. */
   verifierIntegrity?: { expectedSha256: string; observedSha256: string | null; match: boolean };
+  /** Where the baseline handler came from: the repo fixture, or a user file passed to the CLI with --handler (never via the web API). */
+  baselineOrigin?: { kind: "fixture" | "user"; label: string; sha256: string; bytes: number };
 };
 
 /** additive (backend) */

@@ -51,6 +51,7 @@ export function renderReceipt(S: RunSummary): string {
   out.push(`- Started: ${S.startedAt}${S.finishedAt ? ` · Finished: ${S.finishedAt}` : " · (still running)"}${S.durationMs !== undefined ? ` · Duration: ${(S.durationMs / 1000).toFixed(1)} s` : ""}`);
   out.push(`- Workflow: \`${S.scenarioId}\` (synthetic Stripe-style events only; no live Stripe API calls)`);
   out.push(`- Safety contract: ${S.contract || "(not loaded)"}`);
+  if (S.baselineOrigin?.kind === "user") out.push(`- Baseline: **user-supplied file** \`${S.baselineOrigin.label}\` (${S.baselineOrigin.bytes} bytes, sha256 \`${S.baselineOrigin.sha256}\`), passed via the CLI \`--handler\` flag; uploaded only into the sandbox, never executed on the host`);
   out.push(`- Final status: **${S.status}**`);
   if (S.error) out.push(`- Error (${S.error.category}): ${S.error.message}${S.error.hint ? ` — hint: ${S.error.hint}` : ""}`);
   out.push("");
@@ -183,6 +184,7 @@ export function buildReceiptJson(S: RunSummary) {
       ? { blocked: S.egressCheck.blocked, cmd: S.egressCheck.command.cmd, exitCode: S.egressCheck.command.exitCode, stderr: S.egressCheck.command.stderr.slice(0, 300), sandboxId: S.egressCheck.command.sandboxId }
       : null,
     verifierIntegrity: S.verifierIntegrity ?? null,
+    ...(S.baselineOrigin ? { baselineOrigin: S.baselineOrigin } : {}),
     baseline: {
       agentTestsExitCode: S.baselineAgentTests?.exitCode ?? null,
       verifier: verdictOf(S.baselineResult),
