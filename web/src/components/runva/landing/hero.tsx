@@ -32,6 +32,11 @@ export function Hero() {
         <span className="text-[11px] text-neutral-500">
           Preset: Webhook Reliability — Duplicate Fulfillment · synthetic events only
         </span>
+        <StartRunButton
+          scenarioId="durable-idempotency"
+          variant="secondary"
+          label="Harder: durable idempotency across processes + restarts (SQLite)"
+        />
       </div>
 
       <div className="animate-on-scroll [animation:fadeInUp_0.8s_ease-out_0.5s_both] animate mx-auto mt-16 max-w-4xl">

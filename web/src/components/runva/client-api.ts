@@ -39,14 +39,16 @@ function errorText(body: unknown): string | undefined {
   return undefined;
 }
 
-export async function startRun(accessCode?: string): Promise<StartResult> {
+export type PresetScenario = "webhook-idempotency" | "durable-idempotency";
+
+export async function startRun(accessCode?: string, scenarioId: PresetScenario = "webhook-idempotency"): Promise<StartResult> {
   const code = accessCode?.trim() || readStoredAccessCode();
   let res: Response;
   try {
     res = await fetch("/api/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scenarioId: "webhook-idempotency", ...(code ? { accessCode: code } : {}) }),
+      body: JSON.stringify({ scenarioId, ...(code ? { accessCode: code } : {}) }),
     });
   } catch {
     return { ok: false, kind: "error", message: "Could not reach the RUNVA server. Check your connection and try again." };

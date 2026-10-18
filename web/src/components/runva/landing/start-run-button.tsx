@@ -5,12 +5,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowRight02Icon, Loading03Icon } from "@hugeicons/core-free-icons";
-import { startRun, type StartResult } from "../client-api";
+import { startRun, type PresetScenario, type StartResult } from "../client-api";
 
 type Failure = Exclude<StartResult, { ok: true }>;
 
 /** Primary CTA: POST /api/runs then navigate to the live run page. */
-export function StartRunButton() {
+export function StartRunButton({
+  scenarioId = "webhook-idempotency",
+  label = "Run Autonomous Verification",
+  variant = "primary",
+}: { scenarioId?: PresetScenario; label?: string; variant?: "primary" | "secondary" } = {}) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -22,7 +26,7 @@ export function StartRunButton() {
     if (pending) return;
     setPending(true);
     setFailure(null);
-    const res = await startRun(needsCode ? code : undefined);
+    const res = await startRun(needsCode ? code : undefined, scenarioId);
     if (res.ok) {
       router.push(`/runs/${encodeURIComponent(res.runId)}`);
       return;
@@ -50,10 +54,14 @@ export function StartRunButton() {
       <button
         type="submit"
         disabled={pending || (needsCode && !code.trim())}
-        className="group relative flex items-center gap-2 rounded-full bg-white text-black px-8 py-3 text-sm font-medium transition-all hover:bg-gray-200 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-neutral-500"
+        className={
+          variant === "primary"
+            ? "group relative flex items-center gap-2 rounded-full bg-white text-black px-8 py-3 text-sm font-medium transition-all hover:bg-gray-200 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-neutral-500"
+            : "group relative flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-6 py-2.5 text-xs font-medium text-neutral-300 transition-all hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:text-neutral-600"
+        }
       >
         {pending ? <HugeiconsIcon icon={Loading03Icon} size={16} className="animate-spin" /> : null}
-        <span>{pending ? "Starting run…" : "Run Autonomous Verification"}</span>
+        <span>{pending ? "Starting run…" : label}</span>
         {!pending ? (
           <HugeiconsIcon icon={ArrowRight02Icon} size={16} className="transition-transform group-hover:translate-x-0.5" />
         ) : null}

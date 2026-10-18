@@ -71,7 +71,11 @@ export function RunDashboard({
     >
       <section className="pb-8">
         <PageHeading
-          title="Webhook Reliability — Duplicate Fulfillment"
+          title={
+            (summary.scenarioId as string) === "durable-idempotency"
+              ? "Durable Idempotency — Across Processes & Restarts"
+              : "Webhook Reliability — Duplicate Fulfillment"
+          }
           description={summary.contract || "One paid order → one fulfillment, even under duplicate or concurrent delivery."}
           aside={
             <div className="flex flex-col items-start gap-3 md:items-end">

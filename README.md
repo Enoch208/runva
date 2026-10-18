@@ -11,12 +11,13 @@
 > **Judges: the 60-second tour**
 > 1. ▶️ **[2-minute video](https://youtu.be/tlN_ubezhjY)**: one real, unedited run, from the AI writing tests through VERIFIED in a fresh CreateOS VM.
 > 2. **The result above:** the same frozen verifier and the same 20 concurrent deliveries; the original handler fulfills the order **20×**, the agent's patch **1×**.
-> 3. **[Real Stripe event](#real-stripe-test-mode-event):** the same 20 → 1 on a Stripe-generated test-mode `payment_intent.succeeded`, replayed inside a CreateOS VM.
-> 4. **[Twin-VM experiment](#twin-vm-experiment-pause--fork--resume):** CreateOS pause → fork → resume. In an identical snapshot with identical verifier bytes, only `handler.mjs` differs: **20 fulfillments vs 1**.
-> 5. **[Bring your own handler](#bring-your-own-handler):** `e2e-run.ts --handler your-handler.mjs` runs the full loop on your code. A second, differently written vulnerable handler was VERIFIED: 20 → 1.
-> 6. **[Why the judge can't be fooled](#why-the-judge-cant-be-fooled):** the model never grades itself. The verifier is frozen, hash-pinned, re-measured inside a brand-new VM, and tested against forged verdicts.
-> 7. **[Evidence](evidence/runs/):** receipts from 4 real command-line runs (all VERIFIED; the web runs show the same result in the video), including diffs, agent-written tests and per-case results.
-> 8. **Check it yourself:** `node web/scripts/reverify.mjs evidence/runs/run_9ce5ab644beb2546eb/patch.diff` re-runs the frozen verifier in your own fresh VM.
+> 3. **[Scenario 2: durable idempotency](#scenario-2-durable-idempotency-across-processes-and-restarts):** SQLite shared by 4 processes, plus restarts. RUNVA's own in-memory fix **fails** this stricter verifier; the agent then wrote a durable fix that goes **20 → 1**.
+> 4. **[Real Stripe event](#real-stripe-test-mode-event):** the same 20 → 1 on a Stripe-generated test-mode `payment_intent.succeeded`, replayed inside a CreateOS VM.
+> 5. **[Twin-VM experiment](#twin-vm-experiment-pause--fork--resume):** CreateOS pause → fork → resume. In an identical snapshot with identical verifier bytes, only `handler.mjs` differs: **20 fulfillments vs 1**.
+> 6. **[Bring your own handler](#bring-your-own-handler):** `e2e-run.ts --handler your-handler.mjs` runs the full loop on your code. A second, differently written vulnerable handler was VERIFIED: 20 → 1.
+> 7. **[Why the judge can't be fooled](#why-the-judge-cant-be-fooled):** the model never grades itself. The verifier is frozen, hash-pinned, re-measured inside a brand-new VM, and tested against forged verdicts.
+> 8. **[Evidence](evidence/runs/):** receipts from 5 real command-line runs (all VERIFIED; the web runs show the same result in the video), including diffs, agent-written tests and per-case results.
+> 9. **Check it yourself:** `node web/scripts/reverify.mjs evidence/runs/run_9ce5ab644beb2546eb/patch.diff` re-runs the frozen verifier in your own fresh VM.
 
 Webhooks get retried. One payment can trigger the same fulfillment twice — under duplicate delivery, concurrent delivery, or two event IDs for the same order. A happy-path test won't catch it, and an AI-suggested patch is just a suggestion.
 
@@ -169,6 +170,24 @@ Every row is a real run: CreateOS EU sandbox VMs plus OpenRouter `anthropic/clau
 
 The model wrote three different patches (sha256 prefixes `f2cbd018`, `21364f4a`, `c6b0b603`), and every one passed the frozen verifier in a fresh VM. VMs were created in 0.3–3.2 s and destroyed in ~0.2 s. `scripts/reverify.mjs` independently re-ran the frozen verifier against the `run_9ce5…` patch in a separate VM: 6/6 pass, exit 0. The repair loop (attempts 2–3) exists and is tested on the host, but no real run needed it.
 
+## Scenario 2: durable idempotency across processes and restarts
+
+The golden scenario proves single-process idempotency. Scenario 2 takes away the in-memory shortcut. The handler gets `deps.db`, a `node:sqlite` database file **shared by several OS processes**, and the frozen verifier forks real worker processes inside the CreateOS VM:
+
+| Case | What the verifier does |
+|---|---|
+| V1 | 20 deliveries of the same event across **4 concurrent processes** → exactly 1 fulfillment |
+| V2 | **Restart**: a process delivers and exits; a new process redelivers the same event and a different event ID for the same order → still 1 |
+| V3–V4 | Unknown events are ignored; two orders from two processes → 1 each |
+| V5 | Fulfillment fails in one process and a new process retries → fulfilled exactly once (a claim that is never released fails here) |
+| V6 | The handler actually persisted state in the database |
+
+**RUNVA's own earlier fix fails this verifier.** The in-memory patch that went 6/6 on the golden scenario fulfills once *per process* (V1: 4) and again after a restart (V2: 2). Measured on a real CreateOS VM.
+
+**Real runs, both VERIFIED on the first patch attempt:** `run_74cd41813e08532a17` from the CLI (receipt in [`evidence/runs/`](evidence/runs/run_74cd41813e08532a17/)) and `run_18e1f17dc3614646fa` through the web app (91 s). Baseline V1: **20 fulfillments across 4 processes → 1**. The agent's fix claims the order atomically with `INSERT … ON CONFLICT(order_id) DO NOTHING`, fulfills, marks it fulfilled, and deletes the claim if fulfillment throws, so a retry can succeed.
+
+Run it with the second button on Mission Control, `POST /api/runs {"scenarioId":"durable-idempotency"}`, or `scripts/e2e-run.ts --scenario durable-idempotency`.
+
 ## Real Stripe test-mode event
 
 This is a separate proof. The main RUNVA loop still uses synthetic events. `web/scripts/stripe-replay.mjs` creates a real Stripe **test-mode** PaymentIntent ($29.00 USD, `pm_card_visa`, confirmed) and fetches the `payment_intent.succeeded` event that Stripe generated for it. No real money moved. Inside one fresh CreateOS VM, a host-owned harness then delivers that same event 20× concurrently (the way Stripe retries redeliver one event id) to the original handler and to the agent-patched handler from `run_9ce5ab644beb2546eb` (sha256 `f2cbd018…`, re-measured inside the VM), and counts fulfillments in its own closure. On the recorded run (event `evt_3URiVpArkM5UmT2o0djTA2hQ`), the original handler fulfilled the order **20 times** and the patched handler fulfilled it **once**, with all 20 deliveries acknowledged by both. The saved event is Stripe's own payload with only `request` dropped and `client_secret` blanked: [`evidence/stripe/2026-10-18T01-03-46-557Z/`](evidence/stripe/2026-10-18T01-03-46-557Z/).
@@ -252,6 +271,6 @@ Environment variables (names only; see `.env.example`): `CREATEOS_SANDBOX_API_KE
 
 ## Scope of proof
 
-Verified for these synthetic conditions in this sandbox — **not a production guarantee**. The fixture is single-process; production durability requires a transactional/idempotent datastore and isn't covered across process crashes or multiple instances. Hashes identify artifacts; they aren't proof of correctness. Run state is in memory and is lost on server restart.
+Verified for these synthetic conditions in this sandbox — **not a production guarantee**. The golden fixture is single-process. Scenario 2 adds a shared SQLite database, multiple processes and restarts, but not a process crashing *between* claiming an order and finishing it: without a claim expiry or lease, that order would stay "processing". Multi-host databases and network partitions aren't covered. Hashes identify artifacts; they aren't proof of correctness. Run state is in memory and is lost on server restart.
 
 Built from scratch for *Build Agents That Run Code — CreateOS × Stripe Projects*, October 17, 2026.

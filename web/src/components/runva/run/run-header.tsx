@@ -32,7 +32,7 @@ export function RunHeader({
         <div className="flex flex-col min-w-0">
           <span className="text-sm font-medium text-white">{STATUS_LABEL[summary.status] ?? summary.status}</span>
           <span className="truncate text-xs text-neutral-500" title={summary.runId}>
-            {shortId(summary.runId, 22)} · webhook-idempotency
+            {shortId(summary.runId, 22)} · {summary.scenarioId}
           </span>
         </div>
       </div>
