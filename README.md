@@ -159,6 +159,15 @@ Every row is a real run: CreateOS EU sandbox VMs plus OpenRouter `anthropic/clau
 
 The model wrote three different patches (sha256 prefixes `f2cbd018`, `21364f4a`, `c6b0b603`), and every one passed the frozen verifier in a fresh VM. VMs were created in 0.3–3.2 s and destroyed in ~0.2 s. `scripts/reverify.mjs` independently re-ran the frozen verifier against the `run_9ce5…` patch in a separate VM: 6/6 pass, exit 0. The repair loop (attempts 2–3) exists and is tested on the host, but no real run needed it.
 
+## Real Stripe test-mode event
+
+This is a separate proof. The main RUNVA loop still uses synthetic events. `web/scripts/stripe-replay.mjs` creates a real Stripe **test-mode** PaymentIntent ($29.00 USD, `pm_card_visa`, confirmed) and fetches the `payment_intent.succeeded` event that Stripe generated for it. No real money moved. Inside one fresh CreateOS VM, a host-owned harness then delivers that same event 20× concurrently (the way Stripe retries redeliver one event id) to the original handler and to the agent-patched handler from `run_9ce5ab644beb2546eb` (sha256 `f2cbd018…`, re-measured inside the VM), and counts fulfillments in its own closure. On the recorded run (event `evt_3URiVpArkM5UmT2o0djTA2hQ`), the original handler fulfilled the order **20 times** and the patched handler fulfilled it **once**, with all 20 deliveries acknowledged by both. The saved event is Stripe's own payload with only `request` dropped and `client_secret` blanked: [`evidence/stripe/2026-10-18T01-03-46-557Z/`](evidence/stripe/2026-10-18T01-03-46-557Z/).
+
+```bash
+set -a; . ./.env; set +a   # STRIPE_TEST_SECRET_KEY (must start with sk_test_) and CREATEOS_SANDBOX_API_KEY
+node web/scripts/stripe-replay.mjs
+```
+
 ## Verify it yourself
 
 ```bash

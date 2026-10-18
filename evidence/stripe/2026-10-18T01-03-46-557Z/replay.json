@@ -1,0 +1,111 @@
+{
+  "schema": "runva.stripe-replay.v1",
+  "createdAt": "2026-10-18T01:03:46.560Z",
+  "note": "Real Stripe TEST-MODE event replayed inside a CreateOS VM. Separate from the main RUNVA loop, which uses synthetic events. No real money moved.",
+  "stripe": {
+    "mode": "test",
+    "livemode": false,
+    "paymentIntentId": "pi_3URiVpArkM5UmT2o03r88kub",
+    "paymentIntentStatus": "succeeded",
+    "amount": 2900,
+    "currency": "usd",
+    "paymentMethod": "pm_card_visa",
+    "orderId": "order_stripe_f0adba",
+    "eventId": "evt_3URiVpArkM5UmT2o0djTA2hQ",
+    "eventType": "payment_intent.succeeded",
+    "eventCreated": 1792285426,
+    "eventApiVersion": "2025-04-30.basil",
+    "eventPolls": 1
+  },
+  "inputs": {
+    "baseline": {
+      "path": "web/fixtures/webhook-idempotency/handler.vulnerable.mjs",
+      "sha256": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0",
+      "recordedIn": "run_9ce5ab644beb2546eb summary.baselineSha256 + receipt.hashes.baselineHandler",
+      "inVmSha256": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0"
+    },
+    "patched": {
+      "source": "evidence/runs/run_9ce5ab644beb2546eb/patch.diff (embedded final source)",
+      "sha256": "f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00",
+      "recordedIn": "run_9ce5ab644beb2546eb summary.finalResult.handlerSha256 + receipt.hashes.candidateHandler",
+      "inVmSha256": "f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00"
+    },
+    "harness": {
+      "path": "replay-harness.mjs",
+      "sha256": "7006a99765fb03cbbdb413d1f3bb61297f52b4e6a0c807087da58ac61c526546",
+      "inVmSha256": "7006a99765fb03cbbdb413d1f3bb61297f52b4e6a0c807087da58ac61c526546"
+    },
+    "event": {
+      "path": "stripe-event.json",
+      "sha256": "2f3b8112a24f8ae145a810e242351699112bddf065e11c58dea42672f9126720",
+      "sanitized": [
+        "dropped top-level `request`",
+        "redacted data.object.client_secret"
+      ],
+      "keyLikeStringsFound": 0,
+      "inVmSha256": "2f3b8112a24f8ae145a810e242351699112bddf065e11c58dea42672f9126720"
+    }
+  },
+  "sandbox": {
+    "idShort": "sb-01m568j…",
+    "name": "runva-st-bb91873b",
+    "shape": "s-1vcpu-1gb",
+    "rootfs": "devbox:1",
+    "baseUrl": "https://api-eu.sb.createos.sh",
+    "ingressEnabled": false,
+    "egress": [
+      "registry.npmjs.org:443"
+    ],
+    "destroyed": true,
+    "nodeVersion": "v24.21.0"
+  },
+  "command": {
+    "cmd": "node /workspace/replay.mjs",
+    "exitCode": 0,
+    "execMs": 122.078,
+    "stdout": "{\"handler\":\"baseline\",\"deliveries\":20,\"fulfillments\":20,\"acknowledged\":20,\"orderId\":\"order_stripe_f0adba\",\"eventId\":\"evt_3URiVpArkM5UmT2o0djTA2hQ\",\"eventType\":\"payment_intent.succeeded\",\"totalFulfillOrderCalls\":20,\"rejected\":0,\"actions\":{\"fulfilled\":20},\"durationMs\":25}\n{\"handler\":\"patched\",\"deliveries\":20,\"fulfillments\":1,\"acknowledged\":20,\"orderId\":\"order_stripe_f0adba\",\"eventId\":\"evt_3URiVpArkM5UmT2o0djTA2hQ\",\"eventType\":\"payment_intent.succeeded\",\"totalFulfillOrderCalls\":1,\"rejected\":0,\"actions\":{\"fulfilled\":1,\"duplicate\":19},\"durationMs\":25}\n",
+    "stderr": ""
+  },
+  "results": {
+    "baseline": {
+      "handler": "baseline",
+      "deliveries": 20,
+      "fulfillments": 20,
+      "acknowledged": 20,
+      "orderId": "order_stripe_f0adba",
+      "eventId": "evt_3URiVpArkM5UmT2o0djTA2hQ",
+      "eventType": "payment_intent.succeeded",
+      "totalFulfillOrderCalls": 20,
+      "rejected": 0,
+      "actions": {
+        "fulfilled": 20
+      },
+      "durationMs": 25
+    },
+    "patched": {
+      "handler": "patched",
+      "deliveries": 20,
+      "fulfillments": 1,
+      "acknowledged": 20,
+      "orderId": "order_stripe_f0adba",
+      "eventId": "evt_3URiVpArkM5UmT2o0djTA2hQ",
+      "eventType": "payment_intent.succeeded",
+      "totalFulfillOrderCalls": 1,
+      "rejected": 0,
+      "actions": {
+        "fulfilled": 1,
+        "duplicate": 19
+      },
+      "durationMs": 25
+    }
+  },
+  "timings": {
+    "paymentIntentMs": 1543,
+    "eventPollMs": 668,
+    "sandboxCreateMs": 1755,
+    "replayWallMs": 316,
+    "sandboxDestroyMs": 198,
+    "totalMs": 5952
+  },
+  "outcome": "PASS: patched handler fulfilled order order_stripe_f0adba exactly once from 20 concurrent deliveries of real Stripe event evt_3URiVpArkM5UmT2o0djTA2hQ; baseline fulfilled it 20 times"
+}

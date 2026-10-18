@@ -1,0 +1,26 @@
+RUNVA real Stripe test-mode event replay
+  baseline  web/fixtures/webhook-idempotency/handler.vulnerable.mjs sha256 a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0 (matches run_9ce5ab644beb2546eb)
+  patched   evidence/runs/run_9ce5ab644beb2546eb/patch.diff final source sha256 f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00 (matches run_9ce5ab644beb2546eb)
+  stripe    PaymentIntent pi_3URiVpArkM5UmT2o03r88kub status=succeeded amount=2900 usd livemode=false order_id=order_stripe_f0adba (1543ms)
+  stripe    event evt_3URiVpArkM5UmT2o0djTA2hQ type=payment_intent.succeeded created=2026-10-18T01:03:46.000Z livemode=false (found after 1 poll(s), 668ms)
+  event     saved evidence/stripe/2026-10-18T01-03-46-557Z/stripe-event.json sha256 2f3b8112a24f8ae145a810e242351699112bddf065e11c58dea42672f9126720 (dropped top-level `request`; redacted data.object.client_secret; 0 key-like strings)
+  sandbox   sb-01m568j… created in 1755ms · shape s-1vcpu-1gb · rootfs devbox:1 · ingress off · egress registry.npmjs.org:443
+  in-VM     /workspace/baseline/handler.mjs a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0 (matches)
+  in-VM     /workspace/patched/handler.mjs f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00 (matches)
+  in-VM     /workspace/stripe-event.json 2f3b8112a24f8ae145a810e242351699112bddf065e11c58dea42672f9126720 (matches)
+  in-VM     /workspace/replay.mjs 7006a99765fb03cbbdb413d1f3bb61297f52b4e6a0c807087da58ac61c526546 (matches)
+  node      v24.21.0 (inside the VM)
+
+$ node /workspace/replay.mjs   # same real event x20 concurrently, per handler
+  {"handler":"baseline","deliveries":20,"fulfillments":20,"acknowledged":20,"orderId":"order_stripe_f0adba","eventId":"evt_3URiVpArkM5UmT2o0djTA2hQ","eventType":"payment_intent.succeeded","totalFulfillOrderCalls":20,"rejected":0,"actions":{"fulfilled":20},"durationMs":25}
+  {"handler":"patched","deliveries":20,"fulfillments":1,"acknowledged":20,"orderId":"order_stripe_f0adba","eventId":"evt_3URiVpArkM5UmT2o0djTA2hQ","eventType":"payment_intent.succeeded","totalFulfillOrderCalls":1,"rejected":0,"actions":{"fulfilled":1,"duplicate":19},"durationMs":25}
+  exit code: 0 · exec 122.078ms
+
+Result (real Stripe test-mode event, replayed inside a CreateOS VM)
+  PaymentIntent pi_3URiVpArkM5UmT2o03r88kub · event evt_3URiVpArkM5UmT2o0djTA2hQ (payment_intent.succeeded) · order order_stripe_f0adba
+  baseline  20 deliveries -> 20 fulfillments · acknowledged 20 · actions {"fulfilled":20}
+  patched   20 deliveries -> 1 fulfillment · acknowledged 20 · actions {"fulfilled":1,"duplicate":19}
+  PASS: patched handler fulfilled order order_stripe_f0adba exactly once from 20 concurrent deliveries of real Stripe event evt_3URiVpArkM5UmT2o0djTA2hQ; baseline fulfilled it 20 times
+  sandbox   sb-01m568j… destroyed in 198ms
+  total     5952ms
+Scope: one real Stripe test-mode event, replayed in this sandbox. No real money moved. Not a production guarantee.
