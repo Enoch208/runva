@@ -176,6 +176,15 @@ set -a; . ./.env; set +a   # STRIPE_TEST_SECRET_KEY (must start with sk_test_) a
 node web/scripts/stripe-replay.mjs
 ```
 
+## Twin-VM experiment (pause · fork · resume)
+
+`web/scripts/twin-vm.mjs` is a separate controlled experiment built on CreateOS snapshots: it loads the frozen verifier and the original handler into VM A, where the verifier exits 1 and V1 fulfills the order **20 times**. The script then pauses A, which snapshots that failing state, and forks the paused A into VM B (CreateOS only forks a paused sandbox). Inside B, the verifier sha256 `3222f1a2…` and a random nonce written before the pause both read back identical, and the script overwrites only `target/handler.mjs` with the agent patch from `run_9ce5ab644beb2546eb` (`f2cbd018…`). The same verifier bytes then pass 6/6 with exit 0 and **1** fulfillment, while A, resumed and re-run on its untouched baseline, still exits 1 with 20 fulfillments. Recorded run: pause 3.7 s, fork to running 6.5 s, resume 1.5 s, both VMs destroyed in 0.19 s each, 19 s total ([`evidence/twin-vm/2026-10-18T01-15-27-195Z/`](evidence/twin-vm/2026-10-18T01-15-27-195Z/)). The main RUNVA verdict still runs in a fresh VM, not a fork, on purpose, so that the judge inherits nothing from the VM where the model's code ran.
+
+```bash
+set -a; . ./.env; set +a   # CREATEOS_SANDBOX_API_KEY
+node web/scripts/twin-vm.mjs
+```
+
 ## Verify it yourself
 
 ```bash

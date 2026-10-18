@@ -1,0 +1,243 @@
+{
+  "schema": "runva.twin-vm.v1",
+  "createdAt": "2026-10-18T01:15:27.201Z",
+  "note": "Separate controlled experiment using CreateOS pause/fork/resume. The main RUNVA verdict still runs the frozen verifier in a FRESH VM, never a fork.",
+  "mode": "fork",
+  "baseUrl": "https://api-eu.sb.createos.sh",
+  "spec": {
+    "shape": "s-1vcpu-1gb",
+    "rootfs": "devbox:1",
+    "ingressEnabled": false,
+    "egress": [
+      "registry.npmjs.org:443"
+    ]
+  },
+  "inputs": {
+    "verifier": {
+      "path": "web/fixtures/webhook-idempotency/verifier.mjs",
+      "sha256": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1"
+    },
+    "baselineHandler": {
+      "path": "web/fixtures/webhook-idempotency/handler.vulnerable.mjs",
+      "sha256": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0",
+      "recordedIn": "run_9ce5ab644beb2546eb summary.baselineSha256"
+    },
+    "patchedHandler": {
+      "source": "evidence/runs/run_9ce5ab644beb2546eb/patch.diff (embedded final source)",
+      "sha256": "f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00",
+      "recordedIn": "run_9ce5ab644beb2546eb summary.finalResult.handlerSha256"
+    },
+    "snapshotNonce": {
+      "path": "/workspace/.twin-nonce",
+      "note": "random value written into VM A before pause; read back from the fork"
+    }
+  },
+  "sandboxes": [
+    {
+      "role": "A (original: baseline, paused then resumed)",
+      "idShort": "sb-01m5697…",
+      "name": "runva-tw-ab9bd1eb",
+      "forkedFrom": null,
+      "destroyed": true,
+      "destroyMs": 188,
+      "destroyError": null
+    },
+    {
+      "role": "B (fork of paused A: patched handler)",
+      "idShort": "sb-01m5698…",
+      "name": "nice-chebyshev-6vi0",
+      "forkedFrom": "sb-01m5697…",
+      "destroyed": true,
+      "destroyMs": 188,
+      "destroyError": null
+    }
+  ],
+  "steps": {
+    "a_before_pause": {
+      "hashes": {
+        "verifier": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+        "handler": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0"
+      },
+      "verdict": {
+        "exitCode": 1,
+        "execMs": 524.843,
+        "parsed": true,
+        "pass": false,
+        "verdictPass": false,
+        "passedCases": "4/6",
+        "cases": [
+          {
+            "id": "V1",
+            "pass": false
+          },
+          {
+            "id": "V2",
+            "pass": false
+          },
+          {
+            "id": "V3",
+            "pass": true
+          },
+          {
+            "id": "V4",
+            "pass": true
+          },
+          {
+            "id": "V5",
+            "pass": true
+          },
+          {
+            "id": "V6",
+            "pass": true
+          }
+        ],
+        "failing": [
+          "V1",
+          "V2"
+        ],
+        "v1Observed": {
+          "fulfillments": 20,
+          "deliveries": 20,
+          "acknowledged": 20
+        },
+        "durationMs": 393
+      },
+      "nodeVersion": "v24.21.0"
+    },
+    "b_fork": {
+      "inheritedHashes": {
+        "verifier": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+        "handler": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0"
+      },
+      "nonceInherited": true,
+      "hashes": {
+        "verifier": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+        "handler": "f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00"
+      },
+      "verdict": {
+        "exitCode": 0,
+        "execMs": 519.043,
+        "parsed": true,
+        "pass": true,
+        "verdictPass": true,
+        "passedCases": "6/6",
+        "cases": [
+          {
+            "id": "V1",
+            "pass": true
+          },
+          {
+            "id": "V2",
+            "pass": true
+          },
+          {
+            "id": "V3",
+            "pass": true
+          },
+          {
+            "id": "V4",
+            "pass": true
+          },
+          {
+            "id": "V5",
+            "pass": true
+          },
+          {
+            "id": "V6",
+            "pass": true
+          }
+        ],
+        "failing": [],
+        "v1Observed": {
+          "fulfillments": 1,
+          "deliveries": 20,
+          "acknowledged": 20
+        },
+        "durationMs": 403
+      }
+    },
+    "a_after_resume": {
+      "resumed": true,
+      "hashes": {
+        "verifier": "3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1",
+        "handler": "a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0"
+      },
+      "nonceIntact": true,
+      "verdict": {
+        "exitCode": 1,
+        "execMs": 507.039,
+        "parsed": true,
+        "pass": false,
+        "verdictPass": false,
+        "passedCases": "4/6",
+        "cases": [
+          {
+            "id": "V1",
+            "pass": false
+          },
+          {
+            "id": "V2",
+            "pass": false
+          },
+          {
+            "id": "V3",
+            "pass": true
+          },
+          {
+            "id": "V4",
+            "pass": true
+          },
+          {
+            "id": "V5",
+            "pass": true
+          },
+          {
+            "id": "V6",
+            "pass": true
+          }
+        ],
+        "failing": [
+          "V1",
+          "V2"
+        ],
+        "v1Observed": {
+          "fulfillments": 20,
+          "deliveries": 20,
+          "acknowledged": 20
+        },
+        "durationMs": 402
+      }
+    }
+  },
+  "errors": {},
+  "timings": {
+    "createAMs": 867,
+    "pauseRequestMs": 302,
+    "pauseMs": 3661,
+    "forkRequestMs": 190,
+    "forkMs": 6504,
+    "resumeRequestMs": 311,
+    "resumeMs": 1517,
+    "destroyAMs": 188,
+    "destroyBMs": 188,
+    "totalMs": 19035
+  },
+  "onlyDifference": true,
+  "expectationsMet": {
+    "aBeforePauseFails20": true,
+    "bPasses6of6Fulfills1": true,
+    "aAfterResumeStillFails20": true,
+    "onlyDifference": true,
+    "forkUsed": true,
+    "forkInheritedVerifierAndNonce": true
+  },
+  "outcome": "FORK: A baseline V1 fulfillments 20 (exit 1) · B patched V1 fulfillments 1 (exit 0, 6/6) · A after resume V1 fulfillments 20 (exit 1) · only handler.mjs differs: true",
+  "cleanup": {
+    "checkedAt": "2026-10-18T01:15:46.236Z",
+    "polls": 1,
+    "remaining": [],
+    "error": null,
+    "allDestroyed": true,
+    "noneRunning": true
+  }
+}

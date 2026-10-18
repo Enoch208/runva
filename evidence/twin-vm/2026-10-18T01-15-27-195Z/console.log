@@ -1,0 +1,127 @@
+RUNVA twin-VM experiment: CreateOS pause · fork · resume
+  verifier  web/fixtures/webhook-idempotency/verifier.mjs sha256 3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1
+  baseline  web/fixtures/webhook-idempotency/handler.vulnerable.mjs sha256 a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0 (matches run_9ce5ab644beb2546eb)
+  patched   evidence/runs/run_9ce5ab644beb2546eb/patch.diff final source sha256 f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00 (matches run_9ce5ab644beb2546eb summary.json)
+
+[1] VM A sb-01m5697… created in 867ms · shape s-1vcpu-1gb · rootfs devbox:1 · ingress off · egress registry.npmjs.org:443
+  A         in-VM sha256 verification.mjs 3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1 (frozen verifier)
+  A         in-VM sha256 target/handler.mjs a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0 (baseline handler)
+  A         node v24.21.0 (inside the VM)
+
+$ node /workspace/verification.mjs   # in VM A (baseline, before pause)
+  RUNVA frozen verifier: webhook-idempotency (target: ./target/handler.mjs)
+  FAIL V1 Same event delivered 20 times concurrently fulfills the order once
+       observed fulfillments=20 deliveries=20 acknowledged=20
+       expected fulfillments=1 deliveries=20 acknowledged=20
+       20 overlapping deliveries of evt_demo_001 -> fulfillOrder("order_demo_001") succeeded 20x; results: ok:fulfilled x20
+  FAIL V2 Different event IDs for the same payment/order fulfill it once
+       observed fulfillments=3 deliveries=3 acknowledged=3
+       expected fulfillments=1 deliveries=3 acknowledged=3
+       evt_demo_002_a + evt_demo_002_b (concurrent) then evt_demo_002_c, all for order_demo_002 -> fulfilled 3x; results: ok:fulfilled x3
+  PASS V3 Unknown event types are acknowledged and ignored
+       observed fulfillments=0 deliveries=2 ignored=2
+       expected fulfillments=0 deliveries=2 ignored=2
+       customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0
+  PASS V4 Two different orders are each fulfilled exactly once
+       observed fulfillments=2 perOrder={"order_demo_004a":1,"order_demo_004b":1} fulfilled=2
+       expected fulfillments=2 perOrder={"order_demo_004a":1,"order_demo_004b":1} fulfilled=2
+       order_demo_004a -> resolved ok=true action=fulfilled; order_demo_004b -> resolved ok=true action=fulfilled
+  PASS V5 Failed fulfillment is not marked complete; retry fulfills exactly once
+       observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true
+       expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true
+       delivery 1 (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder) | retry: resolved ok=true action=fulfilled | redelivery: resolved ok=true action=duplicate; fulfillOrder calls=2, successes=1
+  PASS V6 Module exports handleWebhook and fulfills a valid event
+       observed exportType=function result={"ok":true,"action":"fulfilled"} fulfillments=1
+       expected exportType=function result={"ok":true,"action":"fulfilled"} fulfillments=1
+       single valid delivery -> resolved ok=true action=fulfilled
+  RESULT FAIL: 4/6 cases passed in 393ms
+  verifier exit code: 1 · exec 524.843ms
+  verdict: pass=false 4/6 V1:FAIL V2:FAIL V3:pass V4:pass V5:pass V6:pass · V1 fulfillments 20
+
+[2] pausing VM A sb-01m5697… (snapshot of the failing state)
+  A         status=paused · pause request 302ms · paused after 3661ms · paused_at 2026-10-18T01:15:32.537387Z
+
+[3] forking paused VM A -> VM B
+  B         sb-01m5698… returned in 190ms · status=forking · forked_from sb-01m5697…
+  B         running after 6504ms · egress registry.npmjs.org:443 · ingress off
+  B (fork)  in-VM sha256 verification.mjs 3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1 (frozen verifier)
+  B (fork)  in-VM sha256 target/handler.mjs a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0 (baseline handler)
+  B (fork)  snapshot nonce matches A (inherited from the snapshot)
+  B (fork)  overwrote ONLY /workspace/target/handler.mjs with the agent-patched handler
+  B (fork)  in-VM sha256 verification.mjs 3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1 (frozen verifier)
+  B (fork)  in-VM sha256 target/handler.mjs f2cbd01890ab9c45877c352de4380f936ee79912e1c498be9077835e37590d00 (patched handler)
+
+$ node /workspace/verification.mjs   # in VM B (fork, patched handler)
+  RUNVA frozen verifier: webhook-idempotency (target: ./target/handler.mjs)
+  PASS V1 Same event delivered 20 times concurrently fulfills the order once
+       observed fulfillments=1 deliveries=20 acknowledged=20
+       expected fulfillments=1 deliveries=20 acknowledged=20
+       20 overlapping deliveries of evt_demo_001 -> fulfillOrder("order_demo_001") succeeded 1x; results: ok:fulfilled x1, ok:duplicate x19
+  PASS V2 Different event IDs for the same payment/order fulfill it once
+       observed fulfillments=1 deliveries=3 acknowledged=3
+       expected fulfillments=1 deliveries=3 acknowledged=3
+       evt_demo_002_a + evt_demo_002_b (concurrent) then evt_demo_002_c, all for order_demo_002 -> fulfilled 1x; results: ok:fulfilled x1, ok:duplicate x2
+  PASS V3 Unknown event types are acknowledged and ignored
+       observed fulfillments=0 deliveries=2 ignored=2
+       expected fulfillments=0 deliveries=2 ignored=2
+       customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0
+  PASS V4 Two different orders are each fulfilled exactly once
+       observed fulfillments=2 perOrder={"order_demo_004a":1,"order_demo_004b":1} fulfilled=2
+       expected fulfillments=2 perOrder={"order_demo_004a":1,"order_demo_004b":1} fulfilled=2
+       order_demo_004a -> resolved ok=true action=fulfilled; order_demo_004b -> resolved ok=true action=fulfilled
+  PASS V5 Failed fulfillment is not marked complete; retry fulfills exactly once
+       observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true
+       expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true
+       delivery 1 (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder) | retry: resolved ok=true action=fulfilled | redelivery: resolved ok=true action=duplicate; fulfillOrder calls=2, successes=1
+  PASS V6 Module exports handleWebhook and fulfills a valid event
+       observed exportType=function result={"ok":true,"action":"fulfilled"} fulfillments=1
+       expected exportType=function result={"ok":true,"action":"fulfilled"} fulfillments=1
+       single valid delivery -> resolved ok=true action=fulfilled
+  RESULT PASS: 6/6 cases passed in 403ms
+  verifier exit code: 0 · exec 519.043ms
+  verdict: pass=true 6/6 V1:pass V2:pass V3:pass V4:pass V5:pass V6:pass · V1 fulfillments 1
+
+[4] resuming VM A sb-01m5697…
+  A         running again · resume request 311ms · running after 1517ms
+  A         in-VM sha256 verification.mjs 3222f1a24ac7179ee829b5b53ebe336f2ff23c9de39d8923850fae717d3791e1 (frozen verifier)
+  A         in-VM sha256 target/handler.mjs a0932076a37e182ee69129b65ba8976e8916939062b862154dbb2f3835e896f0 (baseline handler)
+
+$ node /workspace/verification.mjs   # in VM A (resumed, untouched baseline)
+  RUNVA frozen verifier: webhook-idempotency (target: ./target/handler.mjs)
+  FAIL V1 Same event delivered 20 times concurrently fulfills the order once
+       observed fulfillments=20 deliveries=20 acknowledged=20
+       expected fulfillments=1 deliveries=20 acknowledged=20
+       20 overlapping deliveries of evt_demo_001 -> fulfillOrder("order_demo_001") succeeded 20x; results: ok:fulfilled x20
+  FAIL V2 Different event IDs for the same payment/order fulfill it once
+       observed fulfillments=3 deliveries=3 acknowledged=3
+       expected fulfillments=1 deliveries=3 acknowledged=3
+       evt_demo_002_a + evt_demo_002_b (concurrent) then evt_demo_002_c, all for order_demo_002 -> fulfilled 3x; results: ok:fulfilled x3
+  PASS V3 Unknown event types are acknowledged and ignored
+       observed fulfillments=0 deliveries=2 ignored=2
+       expected fulfillments=0 deliveries=2 ignored=2
+       customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0
+  PASS V4 Two different orders are each fulfilled exactly once
+       observed fulfillments=2 perOrder={"order_demo_004a":1,"order_demo_004b":1} fulfilled=2
+       expected fulfillments=2 perOrder={"order_demo_004a":1,"order_demo_004b":1} fulfilled=2
+       order_demo_004a -> resolved ok=true action=fulfilled; order_demo_004b -> resolved ok=true action=fulfilled
+  PASS V5 Failed fulfillment is not marked complete; retry fulfills exactly once
+       observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true
+       expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true
+       delivery 1 (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder) | retry: resolved ok=true action=fulfilled | redelivery: resolved ok=true action=duplicate; fulfillOrder calls=2, successes=1
+  PASS V6 Module exports handleWebhook and fulfills a valid event
+       observed exportType=function result={"ok":true,"action":"fulfilled"} fulfillments=1
+       expected exportType=function result={"ok":true,"action":"fulfilled"} fulfillments=1
+       single valid delivery -> resolved ok=true action=fulfilled
+  RESULT FAIL: 4/6 cases passed in 402ms
+  verifier exit code: 1 · exec 507.039ms
+  verdict: pass=false 4/6 V1:FAIL V2:FAIL V3:pass V4:pass V5:pass V6:pass · V1 fulfillments 20
+
+Result: FORK: A baseline V1 fulfillments 20 (exit 1) · B patched V1 fulfillments 1 (exit 0, 6/6) · A after resume V1 fulfillments 20 (exit 1) · only handler.mjs differs: true
+PASS: identical snapshot + identical verifier bytes; only handler.mjs differs -> 20 fulfillments vs 1
+
+[5] cleanup
+  destroyed B sb-01m5698… in 188ms
+  destroyed A sb-01m5697… in 188ms
+  REST list check (1 poll(s)): 0 of our sandboxes remain
+  total     19035ms
+Scope: one controlled experiment with synthetic events in these sandboxes. Not a production guarantee.
