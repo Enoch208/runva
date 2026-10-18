@@ -1,0 +1,1732 @@
+{
+  "runId": "run_74cd41813e08532a17",
+  "scenarioId": "durable-idempotency",
+  "status": "VERIFIED",
+  "startedAt": "2026-10-18T01:55:26.295Z",
+  "contract": "One paid order leads to exactly one fulfillment, even when the webhook is delivered concurrently to several worker processes sharing one SQLite database, redelivered after a process restart, or sent under a different event ID; a failed fulfillment is never marked complete and can be retried by another process.",
+  "baselineSource": "// Payment webhook handler: fulfills an order when its payment succeeds.\n// Runs on several worker processes; order state lives in the shared SQLite database (deps.db).\n\nexport async function handleWebhook(event, deps) {\n  if (event.type !== \"payment_intent.succeeded\") {\n    return { ok: true, action: \"ignored\" };\n  }\n\n  const { db, fulfillOrder } = deps;\n  db.exec(`CREATE TABLE IF NOT EXISTS orders (\n    order_id      TEXT PRIMARY KEY,\n    status        TEXT NOT NULL,\n    last_event_id TEXT,\n    updated_at    TEXT NOT NULL\n  )`);\n\n  const orderId = event.data.object.metadata.order_id;\n\n  // Stripe redelivers webhooks, so skip orders we've already fulfilled.\n  const row = db.prepare(\"SELECT status FROM orders WHERE order_id = ?\").get(orderId);\n  if (row?.status === \"fulfilled\") {\n    return { ok: true, action: \"duplicate\" };\n  }\n\n  await fulfillOrder(orderId);\n\n  // Record the fulfillment only after it succeeds, so a failed attempt can be retried.\n  db.prepare(\n    `INSERT INTO orders (order_id, status, last_event_id, updated_at)\n     VALUES (?, 'fulfilled', ?, ?)\n     ON CONFLICT(order_id) DO UPDATE SET\n       status = 'fulfilled', last_event_id = excluded.last_event_id, updated_at = excluded.updated_at`,\n  ).run(orderId, event.id, new Date().toISOString());\n\n  return { ok: true, action: \"fulfilled\" };\n}\n",
+  "baselineSha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+  "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+  "model": "openrouter:anthropic/claude-sonnet-5.5",
+  "provider": "openrouter",
+  "credentialSource": "CREATEOS_SANDBOX_API_KEY",
+  "attempts": [
+    {
+      "attempt": 1,
+      "diagnosis": "The handler does SELECT, then awaits fulfillOrder, then writes 'fulfilled'. Nothing is claimed before the await, so every concurrent or overlapping delivery sees no 'fulfilled' row and calls fulfillOrder. Different event IDs for the same order race in the same way.",
+      "changeSummary": "Before calling fulfillOrder, the handler now claims the order atomically with INSERT ... ON CONFLICT(order_id) DO NOTHING, writing a 'processing' row. Only the delivery with changes === 1 may fulfill; any other delivery returns 'duplicate'. After fulfillOrder succeeds, the row is updated to 'fulfilled'. If fulfillOrder throws, the 'processing' claim is deleted so any process can retry, and the original error is rethrown. No transaction is held across an await. Unknown event types return before any write.",
+      "sourceCode": "// Payment webhook handler: fulfills an order when its payment succeeds.\n// Runs on several worker processes; order state lives in the shared SQLite database (deps.db).\n\nexport async function handleWebhook(event, deps) {\n  if (event.type !== \"payment_intent.succeeded\") {\n    return { ok: true, action: \"ignored\" };\n  }\n\n  const { db, fulfillOrder } = deps;\n  db.exec(`CREATE TABLE IF NOT EXISTS orders (\n    order_id      TEXT PRIMARY KEY,\n    status        TEXT NOT NULL,\n    last_event_id TEXT,\n    updated_at    TEXT NOT NULL\n  )`);\n\n  const orderId = event.data.object.metadata.order_id;\n\n  // Atomically claim the order. Only the delivery that inserts the row may fulfill.\n  const claim = db\n    .prepare(\n      `INSERT INTO orders (order_id, status, last_event_id, updated_at)\n       VALUES (?, 'processing', ?, ?)\n       ON CONFLICT(order_id) DO NOTHING`,\n    )\n    .run(orderId, event.id, new Date().toISOString());\n\n  if (Number(claim.changes) !== 1) {\n    return { ok: true, action: \"duplicate\" };\n  }\n\n  try {\n    await fulfillOrder(orderId);\n  } catch (err) {\n    // Release the claim so a later retry (any process) can fulfill the order.\n    db.prepare(\"DELETE FROM orders WHERE order_id = ? AND status = 'processing'\").run(orderId);\n    throw err;\n  }\n\n  // Record completion only after fulfillment succeeded.\n  db.prepare(\n    `UPDATE orders SET status = 'fulfilled', last_event_id = ?, updated_at = ?\n     WHERE order_id = ?`,\n  ).run(event.id, new Date().toISOString(), orderId);\n\n  return { ok: true, action: \"fulfilled\" };\n}\n",
+      "sourceSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+      "diff": "===================================================================\n--- a/handler.mjs\tbaseline\n+++ b/handler.mjs\tcandidate 1\n@@ -15,22 +15,33 @@\n   )`);\n \n   const orderId = event.data.object.metadata.order_id;\n \n-  // Stripe redelivers webhooks, so skip orders we've already fulfilled.\n-  const row = db.prepare(\"SELECT status FROM orders WHERE order_id = ?\").get(orderId);\n-  if (row?.status === \"fulfilled\") {\n+  // Atomically claim the order. Only the delivery that inserts the row may fulfill.\n+  const claim = db\n+    .prepare(\n+      `INSERT INTO orders (order_id, status, last_event_id, updated_at)\n+       VALUES (?, 'processing', ?, ?)\n+       ON CONFLICT(order_id) DO NOTHING`,\n+    )\n+    .run(orderId, event.id, new Date().toISOString());\n+\n+  if (Number(claim.changes) !== 1) {\n     return { ok: true, action: \"duplicate\" };\n   }\n \n-  await fulfillOrder(orderId);\n+  try {\n+    await fulfillOrder(orderId);\n+  } catch (err) {\n+    // Release the claim so a later retry (any process) can fulfill the order.\n+    db.prepare(\"DELETE FROM orders WHERE order_id = ? AND status = 'processing'\").run(orderId);\n+    throw err;\n+  }\n \n-  // Record the fulfillment only after it succeeds, so a failed attempt can be retried.\n+  // Record completion only after fulfillment succeeded.\n   db.prepare(\n-    `INSERT INTO orders (order_id, status, last_event_id, updated_at)\n-     VALUES (?, 'fulfilled', ?, ?)\n-     ON CONFLICT(order_id) DO UPDATE SET\n-       status = 'fulfilled', last_event_id = excluded.last_event_id, updated_at = excluded.updated_at`,\n-  ).run(orderId, event.id, new Date().toISOString());\n+    `UPDATE orders SET status = 'fulfilled', last_event_id = ?, updated_at = ?\n+     WHERE order_id = ?`,\n+  ).run(event.id, new Date().toISOString(), orderId);\n \n   return { ok: true, action: \"fulfilled\" };\n }\n",
+      "model": "openrouter:anthropic/claude-sonnet-5.5",
+      "syntaxCheck": {
+        "label": "attempt 1: syntax check",
+        "cmd": "node --check /workspace/target/handler.mjs",
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": "",
+        "execMs": 49.54,
+        "sandboxId": "sb-01m…erq2",
+        "at": "2026-10-18T01:56:42.716Z"
+      },
+      "agentTests": {
+        "label": "attempt 1: agent tests",
+        "cmd": "node /workspace/agent-tests.mjs",
+        "exitCode": 0,
+        "stdout": "PASS same event to 4 concurrent processes (x2 each) fulfills once\nPASS different event ids, same order, 3 processes fulfills once\nPASS restart: duplicate in a new process after fulfillment is a duplicate\nPASS failure is reported, not recorded, retry in new process fulfills once\nPASS concurrent failing + healthy process, then retry: exactly one fulfillment\nPASS unknown event type is ignored and never fulfills\nPASS independent orders each fulfilled once across processes\nSUMMARY 7/7 passed\n",
+        "stderr": "",
+        "execMs": 5326.594,
+        "sandboxId": "sb-01m…erq2",
+        "at": "2026-10-18T01:56:43.012Z"
+      },
+      "verifier": {
+        "verdict": {
+          "schema": "runva.verdict.v1",
+          "pass": true,
+          "cases": [
+            {
+              "id": "V1",
+              "title": "20 deliveries across 4 concurrent worker processes fulfill the order once",
+              "pass": true,
+              "observed": {
+                "fulfillments": 1,
+                "deliveries": 20,
+                "processes": 4,
+                "acknowledged": 20
+              },
+              "expected": {
+                "fulfillments": 1,
+                "deliveries": 20,
+                "processes": 4,
+                "acknowledged": 20
+              },
+              "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x (per process P1:0 P2:1 P3:0 P4:0); results: ok:duplicate x19, ok:fulfilled x1"
+            },
+            {
+              "id": "V2",
+              "title": "Redelivery after a process restart (same and different event ID) does not fulfill again",
+              "pass": true,
+              "observed": {
+                "fulfillments": 1,
+                "deliveries": 3,
+                "processes": 2,
+                "acknowledged": 3
+              },
+              "expected": {
+                "fulfillments": 1,
+                "deliveries": 3,
+                "processes": 2,
+                "acknowledged": 3
+              },
+              "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+            },
+            {
+              "id": "V3",
+              "title": "Unknown and non-paid event types are acknowledged and ignored",
+              "pass": true,
+              "observed": {
+                "fulfillments": 0,
+                "deliveries": 2,
+                "ignored": 2
+              },
+              "expected": {
+                "fulfillments": 0,
+                "deliveries": 2,
+                "ignored": 2
+              },
+              "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+            },
+            {
+              "id": "V4",
+              "title": "Two different orders delivered from 2 processes are each fulfilled exactly once",
+              "pass": true,
+              "observed": {
+                "fulfillments": 2,
+                "perOrder": {
+                  "order_demo_004a": 1,
+                  "order_demo_004b": 1
+                },
+                "fulfilled": 2,
+                "processes": 2
+              },
+              "expected": {
+                "fulfillments": 2,
+                "perOrder": {
+                  "order_demo_004a": 1,
+                  "order_demo_004b": 1
+                },
+                "fulfilled": 2,
+                "processes": 2
+              },
+              "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+            },
+            {
+              "id": "V5",
+              "title": "Failed fulfillment is not marked complete; a new process retries it exactly once",
+              "pass": true,
+              "observed": {
+                "fulfillments": 1,
+                "firstDeliveryAcknowledged": false,
+                "retryAcknowledged": true,
+                "redeliveryAcknowledged": true,
+                "processes": 2
+              },
+              "expected": {
+                "fulfillments": 1,
+                "firstDeliveryAcknowledged": false,
+                "retryAcknowledged": true,
+                "redeliveryAcknowledged": true,
+                "processes": 2
+              },
+              "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+            },
+            {
+              "id": "V6",
+              "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+              "pass": true,
+              "observed": {
+                "exportType": "function",
+                "result": {
+                  "ok": true,
+                  "action": "fulfilled"
+                },
+                "fulfillments": 1,
+                "persisted": true,
+                "tables": {
+                  "orders": 1
+                }
+              },
+              "expected": {
+                "exportType": "function",
+                "result": {
+                  "ok": true,
+                  "action": "fulfilled"
+                },
+                "fulfillments": 1,
+                "persisted": true
+              },
+              "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+            }
+          ],
+          "durationMs": 710
+        },
+        "exitCode": 0,
+        "handlerSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+        "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+        "command": {
+          "label": "attempt 1: frozen verifier",
+          "cmd": "node /workspace/verification.mjs",
+          "exitCode": 0,
+          "stdout": "…[truncated 1874 chars]\n new process retries it exactly once\n     observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\nPASS V6 Module exports handleWebhook, fulfills a valid event and persists state in deps.db\n     observed exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true tables={\"orders\":1}\n     expected exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true\n     single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\nRESULT PASS: 6/6 cases passed in 710ms\n{\"schema\":\"runva.verdict.v1\",\"pass\":true,\"cases\":[{\"id\":\"V1\",\"title\":\"20 deliveries across 4 concurrent worker processes fulfill the order once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"expected\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"details\":\"4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\\\"order_demo_001\\\") succeeded 1x (per process P1:0 P2:1 P3:0 P4:0); results: ok:duplicate x19, ok:fulfilled x1\"},{\"id\":\"V2\",\"title\":\"Redelivery after a process restart (same and different event ID) does not fulfill again\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"expected\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"details\":\"P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1\"},{\"id\":\"V3\",\"title\":\"Unknown and non-paid event types are acknowledged and ignored\",\"pass\":true,\"observed\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"expected\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"details\":\"customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0\"},{\"id\":\"V4\",\"title\":\"Two different orders delivered from 2 processes are each fulfilled exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"expected\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"details\":\"P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)\"},{\"id\":\"V5\",\"title\":\"Failed fulfillment is not marked complete; a new process retries it exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"expected\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"details\":\"P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\"},{\"id\":\"V6\",\"title\":\"Module exports handleWebhook, fulfills a valid event and persists state in deps.db\",\"pass\":true,\"observed\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true,\"tables\":{\"orders\":1}},\"expected\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true},\"details\":\"single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\"}],\"durationMs\":710}\n",
+          "stderr": "",
+          "execMs": 778.553,
+          "sandboxId": "sb-01m…erq2",
+          "at": "2026-10-18T01:56:48.549Z"
+        }
+      }
+    }
+  ],
+  "attemptCount": 1,
+  "caseResults": [
+    {
+      "id": "V1",
+      "title": "20 deliveries across 4 concurrent worker processes fulfill the order once",
+      "pass": true,
+      "observed": {
+        "fulfillments": 1,
+        "deliveries": 20,
+        "processes": 4,
+        "acknowledged": 20
+      },
+      "expected": {
+        "fulfillments": 1,
+        "deliveries": 20,
+        "processes": 4,
+        "acknowledged": 20
+      },
+      "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x (per process P1:0 P2:0 P3:1 P4:0); results: ok:duplicate x19, ok:fulfilled x1"
+    },
+    {
+      "id": "V2",
+      "title": "Redelivery after a process restart (same and different event ID) does not fulfill again",
+      "pass": true,
+      "observed": {
+        "fulfillments": 1,
+        "deliveries": 3,
+        "processes": 2,
+        "acknowledged": 3
+      },
+      "expected": {
+        "fulfillments": 1,
+        "deliveries": 3,
+        "processes": 2,
+        "acknowledged": 3
+      },
+      "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+    },
+    {
+      "id": "V3",
+      "title": "Unknown and non-paid event types are acknowledged and ignored",
+      "pass": true,
+      "observed": {
+        "fulfillments": 0,
+        "deliveries": 2,
+        "ignored": 2
+      },
+      "expected": {
+        "fulfillments": 0,
+        "deliveries": 2,
+        "ignored": 2
+      },
+      "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+    },
+    {
+      "id": "V4",
+      "title": "Two different orders delivered from 2 processes are each fulfilled exactly once",
+      "pass": true,
+      "observed": {
+        "fulfillments": 2,
+        "perOrder": {
+          "order_demo_004a": 1,
+          "order_demo_004b": 1
+        },
+        "fulfilled": 2,
+        "processes": 2
+      },
+      "expected": {
+        "fulfillments": 2,
+        "perOrder": {
+          "order_demo_004a": 1,
+          "order_demo_004b": 1
+        },
+        "fulfilled": 2,
+        "processes": 2
+      },
+      "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+    },
+    {
+      "id": "V5",
+      "title": "Failed fulfillment is not marked complete; a new process retries it exactly once",
+      "pass": true,
+      "observed": {
+        "fulfillments": 1,
+        "firstDeliveryAcknowledged": false,
+        "retryAcknowledged": true,
+        "redeliveryAcknowledged": true,
+        "processes": 2
+      },
+      "expected": {
+        "fulfillments": 1,
+        "firstDeliveryAcknowledged": false,
+        "retryAcknowledged": true,
+        "redeliveryAcknowledged": true,
+        "processes": 2
+      },
+      "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+    },
+    {
+      "id": "V6",
+      "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+      "pass": true,
+      "observed": {
+        "exportType": "function",
+        "result": {
+          "ok": true,
+          "action": "fulfilled"
+        },
+        "fulfillments": 1,
+        "persisted": true,
+        "tables": {
+          "orders": 1
+        }
+      },
+      "expected": {
+        "exportType": "function",
+        "result": {
+          "ok": true,
+          "action": "fulfilled"
+        },
+        "fulfillments": 1,
+        "persisted": true
+      },
+      "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+    }
+  ],
+  "events": [
+    {
+      "seq": 1,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:55:26.295Z",
+      "status": "CREATED",
+      "kind": "phase",
+      "title": "Run created",
+      "details": {
+        "scenarioId": "durable-idempotency",
+        "model": "openrouter:anthropic/claude-sonnet-5.5",
+        "maxRunMs": 720000
+      }
+    },
+    {
+      "seq": 2,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:55:26.296Z",
+      "status": "INSPECTING",
+      "kind": "phase",
+      "title": "Inspecting target and freezing the independent verifier"
+    },
+    {
+      "seq": 3,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:55:26.298Z",
+      "status": "INSPECTING",
+      "kind": "artifact",
+      "title": "Baseline handler.mjs loaded",
+      "details": {
+        "file": "handler.mjs",
+        "sha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+        "bytes": 1327,
+        "lines": 37
+      }
+    },
+    {
+      "seq": 4,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:55:26.298Z",
+      "status": "INSPECTING",
+      "kind": "artifact",
+      "title": "Frozen verifier hashed (agent cannot see or edit it)",
+      "details": {
+        "file": "verification.mjs",
+        "sha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+        "bytes": 29429,
+        "cases": [
+          "V1",
+          "V2",
+          "V3",
+          "V4",
+          "V5",
+          "V6"
+        ]
+      }
+    },
+    {
+      "seq": 5,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:55:26.299Z",
+      "status": "INSPECTING",
+      "kind": "llm",
+      "title": "Asking anthropic/claude-sonnet-5.5 to write adversarial tests",
+      "details": {
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-5.5",
+        "inputs": [
+          "scenario",
+          "invariant.md",
+          "handler.mjs"
+        ]
+      }
+    },
+    {
+      "seq": 6,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:21.743Z",
+      "status": "TESTS_GENERATED",
+      "kind": "phase",
+      "title": "Agent wrote adversarial tests",
+      "details": {
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-5.5",
+        "latencyMs": 55444,
+        "formatRetries": 0,
+        "usage": {
+          "prompt_tokens": 3114,
+          "completion_tokens": 8537
+        },
+        "file": "agent-tests.mjs",
+        "summary": "Multi-process probes (separate OS processes sharing one SQLite WAL file) for the check-then-await-then-write race in the webhook handler. They cover: the same event delivered concurrently to several processes and repeatedly within one process; different event ids for the same order; a restart duplicate after fulfillment; failure followed by retry from a new process, with no fake acknowledgement and no completed record on failure; a concurrent failure plus success followed by a retry; ignored event types; and independent orders (to catch over-blocking). The original handler should fail the concurrent tests with more than one fulfillment, because the SELECT happens before the awaited fulfillOrder and nothing is claimed.",
+        "sha256": "2ff854f7fd22b6028a7a3ffc1e3a2f4698da7be7b684031957c125696ac78179",
+        "bytes": 7976
+      }
+    },
+    {
+      "seq": 7,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:21.743Z",
+      "status": "TESTS_GENERATED",
+      "kind": "sandbox",
+      "title": "Creating CreateOS sandbox",
+      "details": {
+        "shape": "s-1vcpu-1gb",
+        "rootfs": "devbox:1",
+        "egress": [
+          "registry.npmjs.org:443"
+        ],
+        "ingressEnabled": false,
+        "credentialSource": "CREATEOS_SANDBOX_API_KEY"
+      }
+    },
+    {
+      "seq": 8,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:22.414Z",
+      "status": "TESTS_GENERATED",
+      "kind": "sandbox",
+      "title": "Sandbox sb-01m…erq2 running (created in 671ms)",
+      "details": {
+        "sandboxId": "sb-01m…erq2",
+        "purpose": "work",
+        "createMs": 671,
+        "spawnMs": 42.943,
+        "shape": "s-1vcpu-1gb",
+        "region": "eu",
+        "egress": [
+          "registry.npmjs.org:443"
+        ]
+      }
+    },
+    {
+      "seq": 9,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:23.546Z",
+      "status": "TESTS_GENERATED",
+      "kind": "artifact",
+      "title": "Uploaded baseline handler, agent tests and frozen verifier to the sandbox",
+      "details": {
+        "sandboxId": "sb-01m…erq2",
+        "files": [
+          {
+            "path": "/workspace/target/handler.mjs",
+            "sha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898"
+          },
+          {
+            "path": "/workspace/agent-tests.mjs",
+            "sha256": "2ff854f7fd22b6028a7a3ffc1e3a2f4698da7be7b684031957c125696ac78179"
+          },
+          {
+            "path": "/workspace/verification.mjs",
+            "sha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f"
+          }
+        ]
+      }
+    },
+    {
+      "seq": 10,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:23.979Z",
+      "status": "TESTS_GENERATED",
+      "kind": "command",
+      "title": "Egress blocked: example.com unreachable from sandbox (curl exit 35)",
+      "details": {
+        "label": "security: egress check",
+        "cmd": "curl -sS -m 4 https://example.com",
+        "exitCode": 35,
+        "execMs": 233.427,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "",
+        "stderrTail": "curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to example.com:443 \n",
+        "blocked": true,
+        "allowlist": [
+          "registry.npmjs.org:443"
+        ]
+      }
+    },
+    {
+      "seq": 11,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:23.979Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "phase",
+      "title": "Running the vulnerable baseline in the sandbox"
+    },
+    {
+      "seq": 12,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:24.324Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "command",
+      "title": "Baseline syntax check: exit 0",
+      "details": {
+        "label": "baseline: syntax check",
+        "cmd": "node --check /workspace/target/handler.mjs",
+        "exitCode": 0,
+        "execMs": 145.56,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "",
+        "stderrTail": ""
+      }
+    },
+    {
+      "seq": 13,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:29.709Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "command",
+      "title": "Agent tests vs baseline: exit 1 (failures exposed)",
+      "details": {
+        "label": "baseline: agent tests",
+        "cmd": "node /workspace/agent-tests.mjs",
+        "exitCode": 1,
+        "execMs": 5154.389,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "FAIL same event to 4 concurrent processes (x2 each) fulfills once: total fulfillments 8 expected 1\nFAIL different event ids, same order, 3 processes fulfills once: total fulfillments 6 expected 1\nPASS restart: duplicate in a new process after fulfillment is a duplicate\nPASS failure is reported, not recorded, retry in new process fulfills once\nPASS concurrent failing + healthy process, then retry: exactly one fulfillment\nPASS unknown event type is ignored and never fulfills\nFAIL independent orders each fulfilled once across processes: per-order fulfillments {\"o7a\":3,\"o7b\":3} expected one each\nSUMMARY 4/7 passed\n",
+        "stderrTail": ""
+      }
+    },
+    {
+      "seq": 14,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "command",
+      "title": "baseline: frozen verifier: exit 1 — 5/6 cases pass",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "cmd": "node /workspace/verification.mjs",
+        "exitCode": 1,
+        "execMs": 828.597,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "…[truncated 1846 chars]\nd complete; a new process retries it exactly once\n     observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\nPASS V6 Module exports handleWebhook, fulfills a valid event and persists state in deps.db\n     observed exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true tables={\"orders\":1}\n     expected exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true\n     single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\nRESULT FAIL: 5/6 cases passed in 783ms\n{\"schema\":\"runva.verdict.v1\",\"pass\":false,\"cases\":[{\"id\":\"V1\",\"title\":\"20 deliveries across 4 concurrent worker processes fulfill the order once\",\"pass\":false,\"observed\":{\"fulfillments\":20,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"expected\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"details\":\"4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\\\"order_demo_001\\\") succeeded 20x (per process P1:5 P2:5 P3:5 P4:5); results: ok:fulfilled x20\"},{\"id\":\"V2\",\"title\":\"Redelivery after a process restart (same and different event ID) does not fulfill again\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"expected\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"details\":\"P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1\"},{\"id\":\"V3\",\"title\":\"Unknown and non-paid event types are acknowledged and ignored\",\"pass\":true,\"observed\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"expected\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"details\":\"customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0\"},{\"id\":\"V4\",\"title\":\"Two different orders delivered from 2 processes are each fulfilled exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"expected\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"details\":\"P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)\"},{\"id\":\"V5\",\"title\":\"Failed fulfillment is not marked complete; a new process retries it exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"expected\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"details\":\"P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\"},{\"id\":\"V6\",\"title\":\"Module exports handleWebhook, fulfills a valid event and persists state in deps.db\",\"pass\":true,\"observed\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true,\"tables\":{\"orders\":1}},\"expected\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true},\"details\":\"single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\"}],\"durationMs\":783}\n",
+        "stderrTail": "",
+        "verdictParsed": true,
+        "hostPass": false,
+        "failing": [
+          "V1"
+        ],
+        "handlerSha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+        "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f"
+      }
+    },
+    {
+      "seq": 15,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "assertion",
+      "title": "V1 FAIL — 20 deliveries across 4 concurrent worker processes fulfill the order once",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "id": "V1",
+        "pass": false,
+        "observed": {
+          "fulfillments": 20,
+          "deliveries": 20,
+          "processes": 4,
+          "acknowledged": 20
+        },
+        "expected": {
+          "fulfillments": 1,
+          "deliveries": 20,
+          "processes": 4,
+          "acknowledged": 20
+        },
+        "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 20x (per process P1:5 P2:5 P3:5 P4:5); results: ok:fulfilled x20"
+      }
+    },
+    {
+      "seq": 16,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "assertion",
+      "title": "V2 PASS — Redelivery after a process restart (same and different event ID) does not fulfill again",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "id": "V2",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "deliveries": 3,
+          "processes": 2,
+          "acknowledged": 3
+        },
+        "expected": {
+          "fulfillments": 1,
+          "deliveries": 3,
+          "processes": 2,
+          "acknowledged": 3
+        },
+        "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+      }
+    },
+    {
+      "seq": 17,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "assertion",
+      "title": "V3 PASS — Unknown and non-paid event types are acknowledged and ignored",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "id": "V3",
+        "pass": true,
+        "observed": {
+          "fulfillments": 0,
+          "deliveries": 2,
+          "ignored": 2
+        },
+        "expected": {
+          "fulfillments": 0,
+          "deliveries": 2,
+          "ignored": 2
+        },
+        "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+      }
+    },
+    {
+      "seq": 18,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "assertion",
+      "title": "V4 PASS — Two different orders delivered from 2 processes are each fulfilled exactly once",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "id": "V4",
+        "pass": true,
+        "observed": {
+          "fulfillments": 2,
+          "perOrder": {
+            "order_demo_004a": 1,
+            "order_demo_004b": 1
+          },
+          "fulfilled": 2,
+          "processes": 2
+        },
+        "expected": {
+          "fulfillments": 2,
+          "perOrder": {
+            "order_demo_004a": 1,
+            "order_demo_004b": 1
+          },
+          "fulfilled": 2,
+          "processes": 2
+        },
+        "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+      }
+    },
+    {
+      "seq": 19,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "assertion",
+      "title": "V5 PASS — Failed fulfillment is not marked complete; a new process retries it exactly once",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "id": "V5",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "firstDeliveryAcknowledged": false,
+          "retryAcknowledged": true,
+          "redeliveryAcknowledged": true,
+          "processes": 2
+        },
+        "expected": {
+          "fulfillments": 1,
+          "firstDeliveryAcknowledged": false,
+          "retryAcknowledged": true,
+          "redeliveryAcknowledged": true,
+          "processes": 2
+        },
+        "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+      }
+    },
+    {
+      "seq": 20,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "BASELINE_RUNNING",
+      "kind": "assertion",
+      "title": "V6 PASS — Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+      "details": {
+        "label": "baseline: frozen verifier",
+        "id": "V6",
+        "pass": true,
+        "observed": {
+          "exportType": "function",
+          "result": {
+            "ok": true,
+            "action": "fulfilled"
+          },
+          "fulfillments": 1,
+          "persisted": true,
+          "tables": {
+            "orders": 1
+          }
+        },
+        "expected": {
+          "exportType": "function",
+          "result": {
+            "ok": true,
+            "action": "fulfilled"
+          },
+          "fulfillments": 1,
+          "persisted": true
+        },
+        "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+      }
+    },
+    {
+      "seq": 21,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "FAILURE_REPRODUCED",
+      "kind": "phase",
+      "title": "Failure reproduced: V1 fail on baseline",
+      "details": {
+        "failing": [
+          "V1"
+        ],
+        "exitCode": 1,
+        "agentTestsExposed": true
+      }
+    },
+    {
+      "seq": 22,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "PATCH_GENERATING",
+      "kind": "phase",
+      "title": "Asking the model for a minimal patch, conditioned on the real failures",
+      "details": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 23,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:30.751Z",
+      "status": "PATCH_GENERATING",
+      "kind": "llm",
+      "title": "Asking anthropic/claude-sonnet-5.5 for patch candidate 1",
+      "details": {
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-5.5",
+        "attempt": 1,
+        "evidence": {
+          "failing": [
+            "V1"
+          ],
+          "verifierExitCode": 1
+        }
+      }
+    },
+    {
+      "seq": 24,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:42.186Z",
+      "status": "PATCH_GENERATING",
+      "kind": "artifact",
+      "title": "Candidate 1: handler.mjs (+21 −10 lines)",
+      "details": {
+        "provider": "openrouter",
+        "model": "anthropic/claude-sonnet-5.5",
+        "latencyMs": 11434,
+        "formatRetries": 0,
+        "usage": {
+          "prompt_tokens": 4914,
+          "completion_tokens": 1540
+        },
+        "attempt": 1,
+        "file": "handler.mjs",
+        "sha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+        "diagnosis": "The handler does SELECT, then awaits fulfillOrder, then writes 'fulfilled'. Nothing is claimed before the await, so every concurrent or overlapping delivery sees no 'fulfilled' row and calls fulfillOrder. Different event IDs for the same order race in the same way.",
+        "changeSummary": "Before calling fulfillOrder, the handler now claims the order atomically with INSERT ... ON CONFLICT(order_id) DO NOTHING, writing a 'processing' row. Only the delivery with changes === 1 may fulfill; any other delivery returns 'duplicate'. After fulfillOrder succeeds, the row is updated to 'fulfilled'. If fulfillOrder throws, the 'processing' claim is deleted so any process can retry, and the original error is rethrown. No transaction is held across an await. Unknown event types return before any write.",
+        "added": 21,
+        "removed": 10
+      }
+    },
+    {
+      "seq": 25,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:42.186Z",
+      "status": "PATCH_TESTING",
+      "kind": "phase",
+      "title": "Testing candidate 1 in sandbox sb-01m…erq2",
+      "details": {
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 26,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:43.012Z",
+      "status": "PATCH_TESTING",
+      "kind": "command",
+      "title": "Candidate 1 syntax check: exit 0",
+      "details": {
+        "label": "attempt 1: syntax check",
+        "cmd": "node --check /workspace/target/handler.mjs",
+        "exitCode": 0,
+        "execMs": 49.54,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "",
+        "stderrTail": "",
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 27,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:48.549Z",
+      "status": "PATCH_TESTING",
+      "kind": "command",
+      "title": "Agent tests vs candidate 1: exit 0",
+      "details": {
+        "label": "attempt 1: agent tests",
+        "cmd": "node /workspace/agent-tests.mjs",
+        "exitCode": 0,
+        "execMs": 5326.594,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "PASS same event to 4 concurrent processes (x2 each) fulfills once\nPASS different event ids, same order, 3 processes fulfills once\nPASS restart: duplicate in a new process after fulfillment is a duplicate\nPASS failure is reported, not recorded, retry in new process fulfills once\nPASS concurrent failing + healthy process, then retry: exactly one fulfillment\nPASS unknown event type is ignored and never fulfills\nPASS independent orders each fulfilled once across processes\nSUMMARY 7/7 passed\n",
+        "stderrTail": "",
+        "attempt": 1
+      }
+    },
+    {
+      "seq": 28,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "command",
+      "title": "attempt 1: frozen verifier: exit 0 — 6/6 cases pass",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "cmd": "node /workspace/verification.mjs",
+        "exitCode": 0,
+        "execMs": 778.553,
+        "sandboxId": "sb-01m…erq2",
+        "stdoutTail": "…[truncated 1874 chars]\n new process retries it exactly once\n     observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\nPASS V6 Module exports handleWebhook, fulfills a valid event and persists state in deps.db\n     observed exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true tables={\"orders\":1}\n     expected exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true\n     single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\nRESULT PASS: 6/6 cases passed in 710ms\n{\"schema\":\"runva.verdict.v1\",\"pass\":true,\"cases\":[{\"id\":\"V1\",\"title\":\"20 deliveries across 4 concurrent worker processes fulfill the order once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"expected\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"details\":\"4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\\\"order_demo_001\\\") succeeded 1x (per process P1:0 P2:1 P3:0 P4:0); results: ok:duplicate x19, ok:fulfilled x1\"},{\"id\":\"V2\",\"title\":\"Redelivery after a process restart (same and different event ID) does not fulfill again\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"expected\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"details\":\"P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1\"},{\"id\":\"V3\",\"title\":\"Unknown and non-paid event types are acknowledged and ignored\",\"pass\":true,\"observed\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"expected\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"details\":\"customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0\"},{\"id\":\"V4\",\"title\":\"Two different orders delivered from 2 processes are each fulfilled exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"expected\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"details\":\"P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)\"},{\"id\":\"V5\",\"title\":\"Failed fulfillment is not marked complete; a new process retries it exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"expected\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"details\":\"P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\"},{\"id\":\"V6\",\"title\":\"Module exports handleWebhook, fulfills a valid event and persists state in deps.db\",\"pass\":true,\"observed\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true,\"tables\":{\"orders\":1}},\"expected\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true},\"details\":\"single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\"}],\"durationMs\":710}\n",
+        "stderrTail": "",
+        "verdictParsed": true,
+        "hostPass": true,
+        "failing": [],
+        "handlerSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+        "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f"
+      }
+    },
+    {
+      "seq": 29,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "V1 PASS — 20 deliveries across 4 concurrent worker processes fulfill the order once",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "id": "V1",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "deliveries": 20,
+          "processes": 4,
+          "acknowledged": 20
+        },
+        "expected": {
+          "fulfillments": 1,
+          "deliveries": 20,
+          "processes": 4,
+          "acknowledged": 20
+        },
+        "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x (per process P1:0 P2:1 P3:0 P4:0); results: ok:duplicate x19, ok:fulfilled x1"
+      }
+    },
+    {
+      "seq": 30,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "V2 PASS — Redelivery after a process restart (same and different event ID) does not fulfill again",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "id": "V2",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "deliveries": 3,
+          "processes": 2,
+          "acknowledged": 3
+        },
+        "expected": {
+          "fulfillments": 1,
+          "deliveries": 3,
+          "processes": 2,
+          "acknowledged": 3
+        },
+        "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+      }
+    },
+    {
+      "seq": 31,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "V3 PASS — Unknown and non-paid event types are acknowledged and ignored",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "id": "V3",
+        "pass": true,
+        "observed": {
+          "fulfillments": 0,
+          "deliveries": 2,
+          "ignored": 2
+        },
+        "expected": {
+          "fulfillments": 0,
+          "deliveries": 2,
+          "ignored": 2
+        },
+        "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+      }
+    },
+    {
+      "seq": 32,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "V4 PASS — Two different orders delivered from 2 processes are each fulfilled exactly once",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "id": "V4",
+        "pass": true,
+        "observed": {
+          "fulfillments": 2,
+          "perOrder": {
+            "order_demo_004a": 1,
+            "order_demo_004b": 1
+          },
+          "fulfilled": 2,
+          "processes": 2
+        },
+        "expected": {
+          "fulfillments": 2,
+          "perOrder": {
+            "order_demo_004a": 1,
+            "order_demo_004b": 1
+          },
+          "fulfilled": 2,
+          "processes": 2
+        },
+        "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+      }
+    },
+    {
+      "seq": 33,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "V5 PASS — Failed fulfillment is not marked complete; a new process retries it exactly once",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "id": "V5",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "firstDeliveryAcknowledged": false,
+          "retryAcknowledged": true,
+          "redeliveryAcknowledged": true,
+          "processes": 2
+        },
+        "expected": {
+          "fulfillments": 1,
+          "firstDeliveryAcknowledged": false,
+          "retryAcknowledged": true,
+          "redeliveryAcknowledged": true,
+          "processes": 2
+        },
+        "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+      }
+    },
+    {
+      "seq": 34,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "V6 PASS — Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+      "details": {
+        "label": "attempt 1: frozen verifier",
+        "id": "V6",
+        "pass": true,
+        "observed": {
+          "exportType": "function",
+          "result": {
+            "ok": true,
+            "action": "fulfilled"
+          },
+          "fulfillments": 1,
+          "persisted": true,
+          "tables": {
+            "orders": 1
+          }
+        },
+        "expected": {
+          "exportType": "function",
+          "result": {
+            "ok": true,
+            "action": "fulfilled"
+          },
+          "fulfillments": 1,
+          "persisted": true
+        },
+        "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+      }
+    },
+    {
+      "seq": 35,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "PATCH_TESTING",
+      "kind": "assertion",
+      "title": "Candidate 1 passes all frozen verifier cases in the work VM",
+      "details": {
+        "attempt": 1,
+        "exitCode": 0,
+        "agentTestsExit": 0
+      }
+    },
+    {
+      "seq": 36,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.562Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "phase",
+      "title": "Independent verification: fresh VM with only the final handler + frozen verifier",
+      "details": {
+        "attempt": 1,
+        "freshVm": true
+      }
+    },
+    {
+      "seq": 37,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.783Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "sandbox",
+      "title": "Sandbox sb-01m…erq2 destroyed",
+      "details": {
+        "sandboxId": "sb-01m…erq2",
+        "destroyMs": 221
+      }
+    },
+    {
+      "seq": 38,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:49.783Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "sandbox",
+      "title": "Creating a FRESH CreateOS sandbox for independent verification",
+      "details": {
+        "shape": "s-1vcpu-1gb",
+        "rootfs": "devbox:1",
+        "egress": [
+          "registry.npmjs.org:443"
+        ],
+        "ingressEnabled": false,
+        "credentialSource": "CREATEOS_SANDBOX_API_KEY"
+      }
+    },
+    {
+      "seq": 39,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:50.096Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "sandbox",
+      "title": "Sandbox sb-01m…x91w running (created in 313ms)",
+      "details": {
+        "sandboxId": "sb-01m…x91w",
+        "purpose": "fresh-verifier",
+        "createMs": 313,
+        "spawnMs": 93.244,
+        "shape": "s-1vcpu-1gb",
+        "region": "eu",
+        "egress": [
+          "registry.npmjs.org:443"
+        ]
+      }
+    },
+    {
+      "seq": 40,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:50.924Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "artifact",
+      "title": "Uploaded final handler + frozen verifier",
+      "details": {
+        "sandboxId": "sb-01m…x91w",
+        "files": [
+          {
+            "path": "/workspace/target/handler.mjs",
+            "sha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734"
+          },
+          {
+            "path": "/workspace/verification.mjs",
+            "sha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f"
+          }
+        ]
+      }
+    },
+    {
+      "seq": 41,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:51.148Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "Verifier integrity: in-VM sha256 matches the frozen hash",
+      "details": {
+        "expected": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+        "observed": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+        "sandboxId": "sb-01m…x91w"
+      }
+    },
+    {
+      "seq": 42,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "command",
+      "title": "final: independent verifier: exit 0 — 6/6 cases pass",
+      "details": {
+        "label": "final: independent verifier",
+        "cmd": "node /workspace/verification.mjs",
+        "exitCode": 0,
+        "execMs": 2116.291,
+        "sandboxId": "sb-01m…x91w",
+        "stdoutTail": "…[truncated 1876 chars]\new process retries it exactly once\n     observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\nPASS V6 Module exports handleWebhook, fulfills a valid event and persists state in deps.db\n     observed exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true tables={\"orders\":1}\n     expected exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true\n     single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\nRESULT PASS: 6/6 cases passed in 1699ms\n{\"schema\":\"runva.verdict.v1\",\"pass\":true,\"cases\":[{\"id\":\"V1\",\"title\":\"20 deliveries across 4 concurrent worker processes fulfill the order once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"expected\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"details\":\"4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\\\"order_demo_001\\\") succeeded 1x (per process P1:0 P2:0 P3:1 P4:0); results: ok:duplicate x19, ok:fulfilled x1\"},{\"id\":\"V2\",\"title\":\"Redelivery after a process restart (same and different event ID) does not fulfill again\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"expected\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"details\":\"P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1\"},{\"id\":\"V3\",\"title\":\"Unknown and non-paid event types are acknowledged and ignored\",\"pass\":true,\"observed\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"expected\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"details\":\"customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0\"},{\"id\":\"V4\",\"title\":\"Two different orders delivered from 2 processes are each fulfilled exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"expected\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"details\":\"P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)\"},{\"id\":\"V5\",\"title\":\"Failed fulfillment is not marked complete; a new process retries it exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"expected\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"details\":\"P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\"},{\"id\":\"V6\",\"title\":\"Module exports handleWebhook, fulfills a valid event and persists state in deps.db\",\"pass\":true,\"observed\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true,\"tables\":{\"orders\":1}},\"expected\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true},\"details\":\"single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\"}],\"durationMs\":1699}\n",
+        "stderrTail": "",
+        "verdictParsed": true,
+        "hostPass": true,
+        "failing": [],
+        "handlerSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+        "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f"
+      }
+    },
+    {
+      "seq": 43,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "V1 PASS — 20 deliveries across 4 concurrent worker processes fulfill the order once",
+      "details": {
+        "label": "final: independent verifier",
+        "id": "V1",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "deliveries": 20,
+          "processes": 4,
+          "acknowledged": 20
+        },
+        "expected": {
+          "fulfillments": 1,
+          "deliveries": 20,
+          "processes": 4,
+          "acknowledged": 20
+        },
+        "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x (per process P1:0 P2:0 P3:1 P4:0); results: ok:duplicate x19, ok:fulfilled x1"
+      }
+    },
+    {
+      "seq": 44,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "V2 PASS — Redelivery after a process restart (same and different event ID) does not fulfill again",
+      "details": {
+        "label": "final: independent verifier",
+        "id": "V2",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "deliveries": 3,
+          "processes": 2,
+          "acknowledged": 3
+        },
+        "expected": {
+          "fulfillments": 1,
+          "deliveries": 3,
+          "processes": 2,
+          "acknowledged": 3
+        },
+        "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+      }
+    },
+    {
+      "seq": 45,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "V3 PASS — Unknown and non-paid event types are acknowledged and ignored",
+      "details": {
+        "label": "final: independent verifier",
+        "id": "V3",
+        "pass": true,
+        "observed": {
+          "fulfillments": 0,
+          "deliveries": 2,
+          "ignored": 2
+        },
+        "expected": {
+          "fulfillments": 0,
+          "deliveries": 2,
+          "ignored": 2
+        },
+        "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+      }
+    },
+    {
+      "seq": 46,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "V4 PASS — Two different orders delivered from 2 processes are each fulfilled exactly once",
+      "details": {
+        "label": "final: independent verifier",
+        "id": "V4",
+        "pass": true,
+        "observed": {
+          "fulfillments": 2,
+          "perOrder": {
+            "order_demo_004a": 1,
+            "order_demo_004b": 1
+          },
+          "fulfilled": 2,
+          "processes": 2
+        },
+        "expected": {
+          "fulfillments": 2,
+          "perOrder": {
+            "order_demo_004a": 1,
+            "order_demo_004b": 1
+          },
+          "fulfilled": 2,
+          "processes": 2
+        },
+        "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+      }
+    },
+    {
+      "seq": 47,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "V5 PASS — Failed fulfillment is not marked complete; a new process retries it exactly once",
+      "details": {
+        "label": "final: independent verifier",
+        "id": "V5",
+        "pass": true,
+        "observed": {
+          "fulfillments": 1,
+          "firstDeliveryAcknowledged": false,
+          "retryAcknowledged": true,
+          "redeliveryAcknowledged": true,
+          "processes": 2
+        },
+        "expected": {
+          "fulfillments": 1,
+          "firstDeliveryAcknowledged": false,
+          "retryAcknowledged": true,
+          "redeliveryAcknowledged": true,
+          "processes": 2
+        },
+        "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+      }
+    },
+    {
+      "seq": 48,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.446Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "assertion",
+      "title": "V6 PASS — Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+      "details": {
+        "label": "final: independent verifier",
+        "id": "V6",
+        "pass": true,
+        "observed": {
+          "exportType": "function",
+          "result": {
+            "ok": true,
+            "action": "fulfilled"
+          },
+          "fulfillments": 1,
+          "persisted": true,
+          "tables": {
+            "orders": 1
+          }
+        },
+        "expected": {
+          "exportType": "function",
+          "result": {
+            "ok": true,
+            "action": "fulfilled"
+          },
+          "fulfillments": 1,
+          "persisted": true
+        },
+        "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+      }
+    },
+    {
+      "seq": 49,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.633Z",
+      "status": "INDEPENDENT_VERIFYING",
+      "kind": "sandbox",
+      "title": "Sandbox sb-01m…x91w destroyed",
+      "details": {
+        "sandboxId": "sb-01m…x91w",
+        "destroyMs": 187
+      }
+    },
+    {
+      "seq": 50,
+      "runId": "run_74cd41813e08532a17",
+      "at": "2026-10-18T01:56:53.633Z",
+      "status": "VERIFIED",
+      "kind": "phase",
+      "title": "VERIFIED — candidate 1 passes V1–V6 in a fresh CreateOS sandbox (exit 0)",
+      "details": {
+        "durationMs": 87338,
+        "attempts": 1
+      }
+    }
+  ],
+  "sandboxes": [
+    {
+      "id": "sb-01m…erq2",
+      "purpose": "work",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 671,
+      "destroyed": true,
+      "destroyMs": 221
+    },
+    {
+      "id": "sb-01m…x91w",
+      "purpose": "fresh-verifier",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 313,
+      "destroyed": true,
+      "destroyMs": 187
+    }
+  ],
+  "freshVerifierVm": true,
+  "links": {
+    "report": "/api/runs/run_74cd41813e08532a17/report",
+    "patch": "/api/runs/run_74cd41813e08532a17/patch"
+  },
+  "scenarioTitle": "Multi-process payment webhook on SQLite: fulfill each paid order exactly once, across restarts",
+  "baselineOrigin": {
+    "kind": "fixture",
+    "label": "fixtures/durable-idempotency/handler.vulnerable.mjs",
+    "sha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+    "bytes": 1327
+  },
+  "generatedTests": {
+    "summary": "Multi-process probes (separate OS processes sharing one SQLite WAL file) for the check-then-await-then-write race in the webhook handler. They cover: the same event delivered concurrently to several processes and repeatedly within one process; different event ids for the same order; a restart duplicate after fulfillment; failure followed by retry from a new process, with no fake acknowledgement and no completed record on failure; a concurrent failure plus success followed by a retry; ignored event types; and independent orders (to catch over-blocking). The original handler should fail the concurrent tests with more than one fulfillment, because the SELECT happens before the awaited fulfillOrder and nothing is claimed.",
+    "testFilename": "agent-tests.mjs",
+    "testCode": "// Adversarial multi-process idempotency tests for handler.mjs\nimport { DatabaseSync } from 'node:sqlite';\nimport { spawn } from 'node:child_process';\nimport { mkdtempSync, rmSync } from 'node:fs';\nimport { tmpdir } from 'node:os';\nimport { join } from 'node:path';\nimport { fileURLToPath } from 'node:url';\nimport { setTimeout as sleep } from 'node:timers/promises';\nimport assert from 'node:assert';\n\nconst PRAGMAS = 'PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;';\nconst ev = (id, o, type = 'payment_intent.succeeded') => ({ id, type, data: { object: { id: 'pi_' + id, metadata: { order_id: o } } } });\n\nif (process.argv[2] === 'child') {\n  const a = JSON.parse(process.argv[3]);\n  const db = new DatabaseSync(a.file);\n  db.exec(PRAGMAS);\n  const { handleWebhook } = await import('./target/handler.mjs');\n  const byOrder = {};\n  let calls = 0;\n  const fulfillOrder = async (id) => {\n    await sleep(a.delay ?? 100);\n    if (a.failFirst && calls++ === 0) throw new Error('transient');\n    byOrder[id] = (byOrder[id] || 0) + 1;\n  };\n  await sleep(Math.max(0, a.startAt - Date.now()));\n  const settled = await Promise.allSettled(a.events.map((e) => handleWebhook(e, { db, fulfillOrder })));\n  const results = settled.map((s) => (s.status === 'fulfilled' ? s.value : { error: String(s.reason?.message ?? s.reason) }));\n  const fulfilled = Object.values(byOrder).reduce((n, v) => n + v, 0);\n  db.close();\n  console.log(JSON.stringify({ fulfilled, byOrder, results }));\n} else {\n  await main();\n}\n\nfunction run(args) {\n  return new Promise((res) => {\n    const c = spawn(process.execPath, ['--no-warnings', fileURLToPath(import.meta.url), 'child', JSON.stringify(args)]);\n    let out = '';\n    let err = '';\n    let done = false;\n    const fin = (v) => { if (!done) { done = true; clearTimeout(t); res(v); } };\n    c.stdout.on('data', (d) => (out += d));\n    c.stderr.on('data', (d) => (err += d));\n    const t = setTimeout(() => c.kill('SIGKILL'), 15000);\n    c.on('error', (e) => fin({ fulfilled: 0, byOrder: {}, results: [], crashed: String(e.message) }));\n    c.on('close', () => {\n      try {\n        fin(JSON.parse(out.slice(out.lastIndexOf('{\"fulfilled\"'))));\n      } catch {\n        fin({ fulfilled: 0, byOrder: {}, results: [], crashed: err.slice(0, 300) || 'no output' });\n      }\n    });\n  });\n}\n\nasync function main() {\n  const dirs = [];\n  const mk = () => {\n    const d = mkdtempSync(join(tmpdir(), 'agent-'));\n    dirs.push(d);\n    const file = join(d, 't.db');\n    const db = new DatabaseSync(file);\n    db.exec(PRAGMAS);\n    db.close();\n    return file;\n  };\n  const g = async (file, specs, delay = 800) => {\n    const startAt = Date.now() + delay;\n    const rs = await Promise.all(specs.map((s) => run({ file, startAt, ...s })));\n    for (const r of rs) assert.ok(!r.crashed, 'child crashed: ' + r.crashed);\n    return rs;\n  };\n  const sum = (rs) => rs.reduce((n, r) => n + r.fulfilled, 0);\n  const flat = (rs) => rs.flatMap((r) => r.results);\n  const failed = (r) => r.error !== undefined || r.ok === false;\n\n  const tests = [\n    ['same event to 4 concurrent processes (x2 each) fulfills once', async () => {\n      const f = mk();\n      const e = ev('e1', 'o1');\n      const rs = await g(f, [0, 1, 2, 3].map(() => ({ events: [e, e] })));\n      assert.equal(sum(rs), 1, 'total fulfillments ' + sum(rs) + ' expected 1');\n      const all = flat(rs);\n      assert.ok(all.every((r) => r.ok === true && (r.action === 'fulfilled' || r.action === 'duplicate')), 'results ' + JSON.stringify(all));\n      const nf = all.filter((r) => r.action === 'fulfilled').length;\n      assert.equal(nf, 1, 6 + ' dup results expected, fulfilled-action count ' + nf + ' expected 1');\n    }],\n    ['different event ids, same order, 3 processes fulfills once', async () => {\n      const f = mk();\n      const rs = await g(f, [0, 1, 2].map((i) => ({ events: [ev('a' + i, 'o2'), ev('b' + i, 'o2')] })));\n      assert.equal(sum(rs), 1, 'total fulfillments ' + sum(rs) + ' expected 1');\n      const all = flat(rs);\n      assert.ok(all.every((r) => r.ok === true), 'results ' + JSON.stringify(all));\n    }],\n    ['restart: duplicate in a new process after fulfillment is a duplicate', async () => {\n      const f = mk();\n      const e = ev('e3', 'o3');\n      const [A] = await g(f, [{ events: [e] }], 0);\n      assert.equal(A.fulfilled, 1, 'first process fulfilled ' + A.fulfilled + ' expected 1');\n      const [B] = await g(f, [{ events: [e] }], 0);\n      assert.equal(B.fulfilled, 0, 'restarted process fulfilled ' + B.fulfilled + ' expected 0');\n      assert.ok(B.results[0].ok === true && B.results[0].action === 'duplicate', 'result ' + JSON.stringify(B.results[0]));\n      const [C] = await g(f, [{ events: [ev('e3-other', 'o3')] }], 0);\n      assert.equal(C.fulfilled, 0, 'new event id after restart fulfilled ' + C.fulfilled + ' expected 0');\n    }],\n    ['failure is reported, not recorded, retry in new process fulfills once', async () => {\n      const f = mk();\n      const e = ev('e4', 'o4');\n      const [A] = await g(f, [{ events: [e], failFirst: true }], 0);\n      assert.equal(A.fulfilled, 0, 'failing process fulfilled ' + A.fulfilled);\n      assert.ok(failed(A.results[0]), 'failure not reported: ' + JSON.stringify(A.results[0]));\n      const [B] = await g(f, [{ events: [e] }], 0);\n      assert.equal(B.fulfilled, 1, 'retry fulfilled ' + B.fulfilled + ' expected 1');\n      assert.equal(B.results[0].action, 'fulfilled', 'retry result ' + JSON.stringify(B.results[0]));\n      const [C] = await g(f, [{ events: [e] }], 0);\n      assert.equal(C.fulfilled, 0, 'third delivery fulfilled ' + C.fulfilled + ' expected 0');\n      assert.equal(C.results[0].action, 'duplicate', 'third result ' + JSON.stringify(C.results[0]));\n    }],\n    ['concurrent failing + healthy process, then retry: exactly one fulfillment', async () => {\n      const f = mk();\n      const rs = await g(f, [\n        { events: [ev('e5a', 'o5')], failFirst: true },\n        { events: [ev('e5b', 'o5')] },\n      ]);\n      const [A] = rs;\n      if (A.results[0].ok === true && A.results[0].action === 'fulfilled') {\n        assert.equal(A.fulfilled, 1, 'process A acknowledged fulfilled but fulfilled ' + A.fulfilled);\n      }\n      assert.ok(sum(rs) <= 1, 'concurrent phase fulfillments ' + sum(rs) + ' expected <= 1');\n      const [C] = await g(f, [{ events: [ev('e5c', 'o5')] }], 0);\n      const total = sum(rs) + C.fulfilled;\n      assert.equal(total, 1, 'total fulfillments ' + total + ' expected 1 (concurrent ' + sum(rs) + ', retry ' + C.fulfilled + ')');\n    }],\n    ['unknown event type is ignored and never fulfills', async () => {\n      const f = mk();\n      const rs = await g(f, [\n        { events: [ev('e6a', 'o6', 'charge.refunded'), ev('e6b', 'o6', 'payment_intent.created')] },\n        { events: [ev('e6c', 'o6', 'invoice.paid')] },\n      ]);\n      assert.equal(sum(rs), 0, 'fulfillments ' + sum(rs) + ' expected 0');\n      const all = flat(rs);\n      assert.ok(all.length === 3 && all.every((r) => r.ok === true && r.action === 'ignored'), 'results ' + JSON.stringify(all));\n    }],\n    ['independent orders each fulfilled once across processes', async () => {\n      const f = mk();\n      const rs = await g(f, [0, 1, 2].map((i) => ({ events: [ev('x' + i, 'o7a'), ev('y' + i, 'o7b')] })));\n      const m = {};\n      for (const r of rs) for (const [k, v] of Object.entries(r.byOrder)) m[k] = (m[k] || 0) + v;\n      assert.deepEqual(m, { o7a: 1, o7b: 1 }, 'per-order fulfillments ' + JSON.stringify(m) + ' expected one each');\n    }],\n  ];\n\n  let bad = 0;\n  for (const [name, fn] of tests) {\n    try {\n      await fn();\n      console.log('PASS ' + name);\n    } catch (e) {\n      bad++;\n      console.log('FAIL ' + name + ': ' + String(e?.message ?? e).split(String.fromCharCode(10))[0]);\n    }\n  }\n  for (const d of dirs) rmSync(d, { recursive: true, force: true });\n  console.log('SUMMARY ' + (tests.length - bad) + '/' + tests.length + ' passed');\n  process.exitCode = bad ? 1 : 0;\n}\n",
+    "sha256": "2ff854f7fd22b6028a7a3ffc1e3a2f4698da7be7b684031957c125696ac78179",
+    "model": "openrouter:anthropic/claude-sonnet-5.5"
+  },
+  "sandbox": {
+    "id": "sb-01m…erq2",
+    "shape": "s-1vcpu-1gb",
+    "region": "eu",
+    "egress": [
+      "registry.npmjs.org:443"
+    ]
+  },
+  "egressCheck": {
+    "blocked": true,
+    "command": {
+      "label": "security: egress check",
+      "cmd": "curl -sS -m 4 https://example.com",
+      "exitCode": 35,
+      "stdout": "",
+      "stderr": "curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to example.com:443 \n",
+      "execMs": 233.427,
+      "sandboxId": "sb-01m…erq2",
+      "at": "2026-10-18T01:56:23.546Z"
+    }
+  },
+  "baselineAgentTests": {
+    "label": "baseline: agent tests",
+    "cmd": "node /workspace/agent-tests.mjs",
+    "exitCode": 1,
+    "stdout": "FAIL same event to 4 concurrent processes (x2 each) fulfills once: total fulfillments 8 expected 1\nFAIL different event ids, same order, 3 processes fulfills once: total fulfillments 6 expected 1\nPASS restart: duplicate in a new process after fulfillment is a duplicate\nPASS failure is reported, not recorded, retry in new process fulfills once\nPASS concurrent failing + healthy process, then retry: exactly one fulfillment\nPASS unknown event type is ignored and never fulfills\nFAIL independent orders each fulfilled once across processes: per-order fulfillments {\"o7a\":3,\"o7b\":3} expected one each\nSUMMARY 4/7 passed\n",
+    "stderr": "",
+    "execMs": 5154.389,
+    "sandboxId": "sb-01m…erq2",
+    "at": "2026-10-18T01:56:24.324Z"
+  },
+  "baselineResult": {
+    "verdict": {
+      "schema": "runva.verdict.v1",
+      "pass": false,
+      "cases": [
+        {
+          "id": "V1",
+          "title": "20 deliveries across 4 concurrent worker processes fulfill the order once",
+          "pass": false,
+          "observed": {
+            "fulfillments": 20,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 20x (per process P1:5 P2:5 P3:5 P4:5); results: ok:fulfilled x20"
+        },
+        {
+          "id": "V2",
+          "title": "Redelivery after a process restart (same and different event ID) does not fulfill again",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+        },
+        {
+          "id": "V3",
+          "title": "Unknown and non-paid event types are acknowledged and ignored",
+          "pass": true,
+          "observed": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "expected": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+        },
+        {
+          "id": "V4",
+          "title": "Two different orders delivered from 2 processes are each fulfilled exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+        },
+        {
+          "id": "V5",
+          "title": "Failed fulfillment is not marked complete; a new process retries it exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+        },
+        {
+          "id": "V6",
+          "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+          "pass": true,
+          "observed": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true,
+            "tables": {
+              "orders": 1
+            }
+          },
+          "expected": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true
+          },
+          "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+        }
+      ],
+      "durationMs": 783
+    },
+    "exitCode": 1,
+    "handlerSha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+    "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "command": {
+      "label": "baseline: frozen verifier",
+      "cmd": "node /workspace/verification.mjs",
+      "exitCode": 1,
+      "stdout": "…[truncated 1846 chars]\nd complete; a new process retries it exactly once\n     observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\nPASS V6 Module exports handleWebhook, fulfills a valid event and persists state in deps.db\n     observed exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true tables={\"orders\":1}\n     expected exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true\n     single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\nRESULT FAIL: 5/6 cases passed in 783ms\n{\"schema\":\"runva.verdict.v1\",\"pass\":false,\"cases\":[{\"id\":\"V1\",\"title\":\"20 deliveries across 4 concurrent worker processes fulfill the order once\",\"pass\":false,\"observed\":{\"fulfillments\":20,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"expected\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"details\":\"4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\\\"order_demo_001\\\") succeeded 20x (per process P1:5 P2:5 P3:5 P4:5); results: ok:fulfilled x20\"},{\"id\":\"V2\",\"title\":\"Redelivery after a process restart (same and different event ID) does not fulfill again\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"expected\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"details\":\"P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1\"},{\"id\":\"V3\",\"title\":\"Unknown and non-paid event types are acknowledged and ignored\",\"pass\":true,\"observed\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"expected\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"details\":\"customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0\"},{\"id\":\"V4\",\"title\":\"Two different orders delivered from 2 processes are each fulfilled exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"expected\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"details\":\"P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)\"},{\"id\":\"V5\",\"title\":\"Failed fulfillment is not marked complete; a new process retries it exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"expected\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"details\":\"P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\"},{\"id\":\"V6\",\"title\":\"Module exports handleWebhook, fulfills a valid event and persists state in deps.db\",\"pass\":true,\"observed\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true,\"tables\":{\"orders\":1}},\"expected\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true},\"details\":\"single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\"}],\"durationMs\":783}\n",
+      "stderr": "",
+      "execMs": 828.597,
+      "sandboxId": "sb-01m…erq2",
+      "at": "2026-10-18T01:56:29.709Z"
+    }
+  },
+  "verifierIntegrity": {
+    "expectedSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "observedSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "match": true
+  },
+  "finalResult": {
+    "verdict": {
+      "schema": "runva.verdict.v1",
+      "pass": true,
+      "cases": [
+        {
+          "id": "V1",
+          "title": "20 deliveries across 4 concurrent worker processes fulfill the order once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x (per process P1:0 P2:0 P3:1 P4:0); results: ok:duplicate x19, ok:fulfilled x1"
+        },
+        {
+          "id": "V2",
+          "title": "Redelivery after a process restart (same and different event ID) does not fulfill again",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+        },
+        {
+          "id": "V3",
+          "title": "Unknown and non-paid event types are acknowledged and ignored",
+          "pass": true,
+          "observed": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "expected": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+        },
+        {
+          "id": "V4",
+          "title": "Two different orders delivered from 2 processes are each fulfilled exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+        },
+        {
+          "id": "V5",
+          "title": "Failed fulfillment is not marked complete; a new process retries it exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+        },
+        {
+          "id": "V6",
+          "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+          "pass": true,
+          "observed": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true,
+            "tables": {
+              "orders": 1
+            }
+          },
+          "expected": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true
+          },
+          "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+        }
+      ],
+      "durationMs": 1699
+    },
+    "exitCode": 0,
+    "handlerSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+    "verifierSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "command": {
+      "label": "final: independent verifier",
+      "cmd": "node /workspace/verification.mjs",
+      "exitCode": 0,
+      "stdout": "…[truncated 1876 chars]\new process retries it exactly once\n     observed fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     expected fulfillments=1 firstDeliveryAcknowledged=false retryAcknowledged=true redeliveryAcknowledged=true processes=2\n     P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\nPASS V6 Module exports handleWebhook, fulfills a valid event and persists state in deps.db\n     observed exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true tables={\"orders\":1}\n     expected exportType=function result={\"ok\":true,\"action\":\"fulfilled\"} fulfillments=1 persisted=true\n     single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\nRESULT PASS: 6/6 cases passed in 1699ms\n{\"schema\":\"runva.verdict.v1\",\"pass\":true,\"cases\":[{\"id\":\"V1\",\"title\":\"20 deliveries across 4 concurrent worker processes fulfill the order once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"expected\":{\"fulfillments\":1,\"deliveries\":20,\"processes\":4,\"acknowledged\":20},\"details\":\"4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\\\"order_demo_001\\\") succeeded 1x (per process P1:0 P2:0 P3:1 P4:0); results: ok:duplicate x19, ok:fulfilled x1\"},{\"id\":\"V2\",\"title\":\"Redelivery after a process restart (same and different event ID) does not fulfill again\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"expected\":{\"fulfillments\":1,\"deliveries\":3,\"processes\":2,\"acknowledged\":3},\"details\":\"P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1\"},{\"id\":\"V3\",\"title\":\"Unknown and non-paid event types are acknowledged and ignored\",\"pass\":true,\"observed\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"expected\":{\"fulfillments\":0,\"deliveries\":2,\"ignored\":2},\"details\":\"customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0\"},{\"id\":\"V4\",\"title\":\"Two different orders delivered from 2 processes are each fulfilled exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"expected\":{\"fulfillments\":2,\"perOrder\":{\"order_demo_004a\":1,\"order_demo_004b\":1},\"fulfilled\":2,\"processes\":2},\"details\":\"P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)\"},{\"id\":\"V5\",\"title\":\"Failed fulfillment is not marked complete; a new process retries it exactly once\",\"pass\":true,\"observed\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"expected\":{\"fulfillments\":1,\"firstDeliveryAcknowledged\":false,\"retryAcknowledged\":true,\"redeliveryAcknowledged\":true,\"processes\":2},\"details\":\"P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1\"},{\"id\":\"V6\",\"title\":\"Module exports handleWebhook, fulfills a valid event and persists state in deps.db\",\"pass\":true,\"observed\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true,\"tables\":{\"orders\":1}},\"expected\":{\"exportType\":\"function\",\"result\":{\"ok\":true,\"action\":\"fulfilled\"},\"fulfillments\":1,\"persisted\":true},\"details\":\"single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)\"}],\"durationMs\":1699}\n",
+      "stderr": "",
+      "execMs": 2116.291,
+      "sandboxId": "sb-01m…x91w",
+      "at": "2026-10-18T01:56:51.148Z"
+    }
+  },
+  "finishedAt": "2026-10-18T01:56:53.633Z",
+  "durationMs": 87338
+}

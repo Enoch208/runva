@@ -1,0 +1,102 @@
+# RUNVA patch — run run_74cd41813e08532a17 — status VERIFIED — attempt 1 — sha256 f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734
+# Verified for these synthetic conditions in this sandbox. Not a production guarantee.
+
+===================================================================
+--- a/handler.mjs	baseline
++++ b/handler.mjs	candidate 1
+@@ -15,22 +15,33 @@
+   )`);
+ 
+   const orderId = event.data.object.metadata.order_id;
+ 
+-  // Stripe redelivers webhooks, so skip orders we've already fulfilled.
+-  const row = db.prepare("SELECT status FROM orders WHERE order_id = ?").get(orderId);
+-  if (row?.status === "fulfilled") {
++  // Atomically claim the order. Only the delivery that inserts the row may fulfill.
++  const claim = db
++    .prepare(
++      `INSERT INTO orders (order_id, status, last_event_id, updated_at)
++       VALUES (?, 'processing', ?, ?)
++       ON CONFLICT(order_id) DO NOTHING`,
++    )
++    .run(orderId, event.id, new Date().toISOString());
++
++  if (Number(claim.changes) !== 1) {
+     return { ok: true, action: "duplicate" };
+   }
+ 
+-  await fulfillOrder(orderId);
++  try {
++    await fulfillOrder(orderId);
++  } catch (err) {
++    // Release the claim so a later retry (any process) can fulfill the order.
++    db.prepare("DELETE FROM orders WHERE order_id = ? AND status = 'processing'").run(orderId);
++    throw err;
++  }
+ 
+-  // Record the fulfillment only after it succeeds, so a failed attempt can be retried.
++  // Record completion only after fulfillment succeeded.
+   db.prepare(
+-    `INSERT INTO orders (order_id, status, last_event_id, updated_at)
+-     VALUES (?, 'fulfilled', ?, ?)
+-     ON CONFLICT(order_id) DO UPDATE SET
+-       status = 'fulfilled', last_event_id = excluded.last_event_id, updated_at = excluded.updated_at`,
+-  ).run(orderId, event.id, new Date().toISOString());
++    `UPDATE orders SET status = 'fulfilled', last_event_id = ?, updated_at = ?
++     WHERE order_id = ?`,
++  ).run(event.id, new Date().toISOString(), orderId);
+ 
+   return { ok: true, action: "fulfilled" };
+ }
+
+# ---------------------------------------------------------------------------
+# Final handler.mjs (complete source)
+# ---------------------------------------------------------------------------
+# // Payment webhook handler: fulfills an order when its payment succeeds.
+# // Runs on several worker processes; order state lives in the shared SQLite database (deps.db).
+# 
+# export async function handleWebhook(event, deps) {
+#   if (event.type !== "payment_intent.succeeded") {
+#     return { ok: true, action: "ignored" };
+#   }
+# 
+#   const { db, fulfillOrder } = deps;
+#   db.exec(`CREATE TABLE IF NOT EXISTS orders (
+#     order_id      TEXT PRIMARY KEY,
+#     status        TEXT NOT NULL,
+#     last_event_id TEXT,
+#     updated_at    TEXT NOT NULL
+#   )`);
+# 
+#   const orderId = event.data.object.metadata.order_id;
+# 
+#   // Atomically claim the order. Only the delivery that inserts the row may fulfill.
+#   const claim = db
+#     .prepare(
+#       `INSERT INTO orders (order_id, status, last_event_id, updated_at)
+#        VALUES (?, 'processing', ?, ?)
+#        ON CONFLICT(order_id) DO NOTHING`,
+#     )
+#     .run(orderId, event.id, new Date().toISOString());
+# 
+#   if (Number(claim.changes) !== 1) {
+#     return { ok: true, action: "duplicate" };
+#   }
+# 
+#   try {
+#     await fulfillOrder(orderId);
+#   } catch (err) {
+#     // Release the claim so a later retry (any process) can fulfill the order.
+#     db.prepare("DELETE FROM orders WHERE order_id = ? AND status = 'processing'").run(orderId);
+#     throw err;
+#   }
+# 
+#   // Record completion only after fulfillment succeeded.
+#   db.prepare(
+#     `UPDATE orders SET status = 'fulfilled', last_event_id = ?, updated_at = ?
+#      WHERE order_id = ?`,
+#   ).run(event.id, new Date().toISOString(), orderId);
+# 
+#   return { ok: true, action: "fulfilled" };
+# }
+# 

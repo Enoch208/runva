@@ -1,0 +1,361 @@
+{
+  "schema": "runva.receipt.v1",
+  "runId": "run_74cd41813e08532a17",
+  "scenarioId": "durable-idempotency",
+  "scenarioTitle": "Multi-process payment webhook on SQLite: fulfill each paid order exactly once, across restarts",
+  "contract": "One paid order leads to exactly one fulfillment, even when the webhook is delivered concurrently to several worker processes sharing one SQLite database, redelivered after a process restart, or sent under a different event ID; a failed fulfillment is never marked complete and can be retried by another process.",
+  "startedAt": "2026-10-18T01:55:26.295Z",
+  "finishedAt": "2026-10-18T01:56:53.633Z",
+  "durationMs": 87338,
+  "status": "VERIFIED",
+  "verified": true,
+  "error": null,
+  "model": "openrouter:anthropic/claude-sonnet-5.5",
+  "provider": "openrouter",
+  "credentialSource": "CREATEOS_SANDBOX_API_KEY",
+  "sandbox": {
+    "shape": "s-1vcpu-1gb",
+    "region": "eu",
+    "egress": [
+      "registry.npmjs.org:443"
+    ],
+    "ingressEnabled": false
+  },
+  "sandboxes": [
+    {
+      "id": "sb-01m…erq2",
+      "purpose": "work",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 671,
+      "destroyed": true,
+      "destroyMs": 221
+    },
+    {
+      "id": "sb-01m…x91w",
+      "purpose": "fresh-verifier",
+      "shape": "s-1vcpu-1gb",
+      "region": "eu",
+      "createMs": 313,
+      "destroyed": true,
+      "destroyMs": 187
+    }
+  ],
+  "freshVerifierVm": true,
+  "hashes": {
+    "algorithm": "sha256",
+    "baselineHandler": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+    "candidateHandler": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+    "verifier": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "agentTests": "2ff854f7fd22b6028a7a3ffc1e3a2f4698da7be7b684031957c125696ac78179"
+  },
+  "egressCheck": {
+    "blocked": true,
+    "cmd": "curl -sS -m 4 https://example.com",
+    "exitCode": 35,
+    "stderr": "curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL in connection to example.com:443 \n",
+    "sandboxId": "sb-01m…erq2"
+  },
+  "verifierIntegrity": {
+    "expectedSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "observedSha256": "d4ddb799ceb1e9a64b50489f662d5fe1867c3dac83030ee854ea8f73436e785f",
+    "match": true
+  },
+  "baselineOrigin": {
+    "kind": "fixture",
+    "label": "fixtures/durable-idempotency/handler.vulnerable.mjs",
+    "sha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+    "bytes": 1327
+  },
+  "baseline": {
+    "agentTestsExitCode": 1,
+    "verifier": {
+      "exitCode": 1,
+      "verdictParsed": true,
+      "pass": false,
+      "durationMs": 783,
+      "handlerSha256": "1fcf0ba5e6cab045d341a1809de77216f74e96605c8b18d65e59deebc83ec898",
+      "sandboxId": "sb-01m…erq2",
+      "at": "2026-10-18T01:56:29.709Z",
+      "cases": [
+        {
+          "id": "V1",
+          "title": "20 deliveries across 4 concurrent worker processes fulfill the order once",
+          "pass": false,
+          "observed": {
+            "fulfillments": 20,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 20x (per process P1:5 P2:5 P3:5 P4:5); results: ok:fulfilled x20"
+        },
+        {
+          "id": "V2",
+          "title": "Redelivery after a process restart (same and different event ID) does not fulfill again",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+        },
+        {
+          "id": "V3",
+          "title": "Unknown and non-paid event types are acknowledged and ignored",
+          "pass": true,
+          "observed": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "expected": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+        },
+        {
+          "id": "V4",
+          "title": "Two different orders delivered from 2 processes are each fulfilled exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+        },
+        {
+          "id": "V5",
+          "title": "Failed fulfillment is not marked complete; a new process retries it exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+        },
+        {
+          "id": "V6",
+          "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+          "pass": true,
+          "observed": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true,
+            "tables": {
+              "orders": 1
+            }
+          },
+          "expected": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true
+          },
+          "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+        }
+      ]
+    }
+  },
+  "attemptCount": 1,
+  "attempts": [
+    {
+      "attempt": 1,
+      "model": "openrouter:anthropic/claude-sonnet-5.5",
+      "sourceSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+      "diagnosis": "The handler does SELECT, then awaits fulfillOrder, then writes 'fulfilled'. Nothing is claimed before the await, so every concurrent or overlapping delivery sees no 'fulfilled' row and calls fulfillOrder. Different event IDs for the same order race in the same way.",
+      "changeSummary": "Before calling fulfillOrder, the handler now claims the order atomically with INSERT ... ON CONFLICT(order_id) DO NOTHING, writing a 'processing' row. Only the delivery with changes === 1 may fulfill; any other delivery returns 'duplicate'. After fulfillOrder succeeds, the row is updated to 'fulfilled'. If fulfillOrder throws, the 'processing' claim is deleted so any process can retry, and the original error is rethrown. No transaction is held across an await. Unknown event types return before any write.",
+      "syntaxExitCode": 0,
+      "agentTestsExitCode": 0,
+      "verifierExitCode": 0,
+      "failingCases": []
+    }
+  ],
+  "final": {
+    "verifier": {
+      "exitCode": 0,
+      "verdictParsed": true,
+      "pass": true,
+      "durationMs": 1699,
+      "handlerSha256": "f7e6e3f5e1ed33755673c30f0e52b588636c6d1aba0facf92430c44a23f2f734",
+      "sandboxId": "sb-01m…x91w",
+      "at": "2026-10-18T01:56:51.148Z",
+      "cases": [
+        {
+          "id": "V1",
+          "title": "20 deliveries across 4 concurrent worker processes fulfill the order once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 20,
+            "processes": 4,
+            "acknowledged": 20
+          },
+          "details": "4 processes x 5 overlapping deliveries of evt_demo_001 -> fulfillOrder(\"order_demo_001\") succeeded 1x (per process P1:0 P2:0 P3:1 P4:0); results: ok:duplicate x19, ok:fulfilled x1"
+        },
+        {
+          "id": "V2",
+          "title": "Redelivery after a process restart (same and different event ID) does not fulfill again",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "expected": {
+            "fulfillments": 1,
+            "deliveries": 3,
+            "processes": 2,
+            "acknowledged": 3
+          },
+          "details": "P1: evt_demo_002_a -> resolved ok=true action=fulfilled (fulfilled 1x), P1 exited | P2 (restarted, fresh import, same db): evt_demo_002_a redelivery -> resolved ok=true action=duplicate, evt_demo_002_b (same order) -> resolved ok=true action=duplicate | total fulfillments for order_demo_002: 1"
+        },
+        {
+          "id": "V3",
+          "title": "Unknown and non-paid event types are acknowledged and ignored",
+          "pass": true,
+          "observed": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "expected": {
+            "fulfillments": 0,
+            "deliveries": 2,
+            "ignored": 2
+          },
+          "details": "customer.created -> resolved ok=true action=ignored; payment_intent.payment_failed -> resolved ok=true action=ignored; fulfillOrder calls: 0"
+        },
+        {
+          "id": "V4",
+          "title": "Two different orders delivered from 2 processes are each fulfilled exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 2,
+            "perOrder": {
+              "order_demo_004a": 1,
+              "order_demo_004b": 1
+            },
+            "fulfilled": 2,
+            "processes": 2
+          },
+          "details": "P1 order_demo_004a -> resolved ok=true action=fulfilled; P2 order_demo_004b -> resolved ok=true action=fulfilled (concurrent)"
+        },
+        {
+          "id": "V5",
+          "title": "Failed fulfillment is not marked complete; a new process retries it exactly once",
+          "pass": true,
+          "observed": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "expected": {
+            "fulfillments": 1,
+            "firstDeliveryAcknowledged": false,
+            "retryAcknowledged": true,
+            "redeliveryAcknowledged": true,
+            "processes": 2
+          },
+          "details": "P1 delivery (fulfillOrder fails): rejected (Error: simulated transient failure in fulfillOrder), P1 exited | P2 retry: resolved ok=true action=fulfilled | P2 redelivery: resolved ok=true action=duplicate; fulfillOrder calls P1=1 P2=1, successes=1"
+        },
+        {
+          "id": "V6",
+          "title": "Module exports handleWebhook, fulfills a valid event and persists state in deps.db",
+          "pass": true,
+          "observed": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true,
+            "tables": {
+              "orders": 1
+            }
+          },
+          "expected": {
+            "exportType": "function",
+            "result": {
+              "ok": true,
+              "action": "fulfilled"
+            },
+            "fulfillments": 1,
+            "persisted": true
+          },
+          "details": "single valid delivery in a fresh process -> resolved ok=true action=fulfilled; deps.db user tables (rows): orders(1)"
+        }
+      ]
+    }
+  },
+  "scope": "Verified for these synthetic conditions in this sandbox. Not a production guarantee.",
+  "durability": "The fix keeps its idempotency state in a SQLite database file that the frozen verifier shares between several Node processes inside this sandbox, so it was exercised across separate processes and restarts. That is still one machine and one SQLite file: passing this fixture is not a guarantee for other datastores, network partitions, or production load.",
+  "hashNote": "Hashes are reproducibility identifiers for the exact bytes that ran, not cryptographic proof of correct behavior.",
+  "executionBoundary": "All model-generated code executed only inside CreateOS sandboxes; the RUNVA host never executed it."
+}
