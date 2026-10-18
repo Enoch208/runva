@@ -136,7 +136,7 @@ Most agent demos let a model, or a second agent, decide whether the fix worked. 
 
 - **CreateOS Sandbox** (`@nodeops-createos/sandbox`): every test, baseline and patch run happens in a real Firecracker microVM. A work VM handles baseline and repair, then a **fresh VM** runs the final independent verification. Egress is restricted to an allowlist; each run proves it by attempting an outbound request to a non-allowlisted host from inside the VM. VMs are destroyed in `finally` on success, failure, timeout and cancel. SDK surface used: `createSandbox` (shape, rootfs, `ingress_enabled: false`, `egress`), `files.upload`, buffered `runCommand` (stdout, stderr, `exit_code`, `exec_ms`), `destroy`.
 - **CreateOS hosting**: the RUNVA app itself is deployed on CreateOS.
-- **Stripe Projects**: the repo is a Stripe Projects workspace (`.projects/state.json`) with the CreateOS provider linked and the `createos/free` plan and `createos/project` resources provisioned via `stripe projects`. Run `stripe projects status` to see the linked stack. No live Stripe APIs, payments or customer data are used; events are synthetic.
+- **Stripe Projects**: the repo is a Stripe Projects workspace (`.projects/state.json`) with the CreateOS provider linked and the `createos/free` plan and `createos/project` resources provisioned via `stripe projects`. Run `stripe projects status` to see the linked stack. No live-mode Stripe calls, real payments or customer data. The main RUNVA loop uses synthetic events, and a separate [real Stripe test-mode replay](#real-stripe-test-mode-event) shows the same 20 → 1 result on a Stripe-generated `payment_intent.succeeded` event.
 
 ## Evidence
 
