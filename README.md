@@ -8,6 +8,14 @@
 
 ![Same frozen verifier, two handlers: the original handler fulfills one order 20 times; the agent's patch fulfills it once](docs/screenshots/2-verified-before-after.png)
 
+> **Judges: the 60-second tour**
+> 1. ▶️ **[2-minute video](https://youtu.be/tlN_ubezhjY)**: one real, unedited run, from the AI writing tests through VERIFIED in a fresh CreateOS VM.
+> 2. **The result above:** the same frozen verifier and the same 20 concurrent deliveries; the original handler fulfills the order **20×**, the agent's patch **1×**.
+> 3. **[Real Stripe event](#real-stripe-test-mode-event):** the same 20 → 1 on a Stripe-generated test-mode `payment_intent.succeeded`, replayed inside a CreateOS VM.
+> 4. **[Why the judge can't be fooled](#why-the-judge-cant-be-fooled):** the model never grades itself. The verifier is frozen, hash-pinned, re-measured inside a brand-new VM, and tested against forged verdicts.
+> 5. **[Evidence](evidence/runs/):** receipts from 5/5 real VERIFIED runs, including diffs, agent-written tests and per-case results.
+> 6. **Check it yourself:** `node web/scripts/reverify.mjs evidence/runs/run_9ce5ab644beb2546eb/patch.diff` re-runs the frozen verifier in your own fresh VM.
+
 Webhooks get retried. One payment can trigger the same fulfillment twice — under duplicate delivery, concurrent delivery, or two event IDs for the same order. A happy-path test won't catch it, and an AI-suggested patch is just a suggestion.
 
 RUNVA doesn't ask you to trust an AI patch. It:
