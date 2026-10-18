@@ -4,6 +4,8 @@
 
 ▶️ **[Watch the 2-minute demo](https://youtu.be/tlN_ubezhjY)** (a real, unedited run) · **Live:** https://production-runva.tyzo.nodeops.app · **Evidence:** [`evidence/runs/`](evidence/runs/)
 
+> The hosted app is on CreateOS. Starting a run there needs an access code, which is in the submission notes, so strangers can't spend sandbox credits. If the hosted run is unavailable, the video shows a real run end to end, and `evidence/runs/` plus `web/scripts/reverify.mjs` let you check every claim yourself.
+
 ![Same frozen verifier, two handlers: the original handler fulfills one order 20 times; the agent's patch fulfills it once](docs/screenshots/2-verified-before-after.png)
 
 Webhooks get retried. One payment can trigger the same fulfillment twice — under duplicate delivery, concurrent delivery, or two event IDs for the same order. A happy-path test won't catch it, and an AI-suggested patch is just a suggestion.
@@ -101,6 +103,22 @@ CreateOS Firecracker VM (EU, ephemeral, ingress off, egress allowlist)
 **Execution boundary:** model-generated code never runs on the host. There's no `eval`, `vm`, `child_process` or local import of candidate code. The host only hashes, diffs, and parses JSON.
 
 Key files: [`orchestrator.ts`](web/src/lib/runva/orchestrator.ts) (state machine), [`sandbox.ts`](web/src/lib/runva/sandbox.ts) (CreateOS SDK), [`llm.ts`](web/src/lib/runva/llm.ts), [`verifier.ts`](web/src/lib/runva/verifier.ts) (host-side verdict parsing), [`receipt.ts`](web/src/lib/runva/receipt.ts), [`types.ts`](web/src/lib/runva/types.ts) (shared contract), [`fixtures/webhook-idempotency/`](web/fixtures/webhook-idempotency/).
+
+## Why the judge can't be fooled
+
+Most agent demos let a model, or a second agent, decide whether the fix worked. In RUNVA the model never decides pass or fail:
+
+| Attack on the verdict | What stops it | Tested in |
+|---|---|---|
+| Patch prints a fake `{"pass":true}` line | Handler output goes to stderr, and only the verifier's **last** stdout line counts | `web/tests/fixture-integrity.test.ts`, `web/tests/verifier-parse.test.ts` |
+| Patch special-cases the test (reads its own URL or state) | Each case runs in its own `worker_thread` with a fresh module import; counts come from the verifier's own closure, never from the handler's return value | `fixture-integrity.test.ts` |
+| Patch hangs or busy-loops | 2.5 s per-case timeout, workers terminated at 4 s, and the case fails | `fixture-integrity.test.ts` |
+| Model edits the verifier | It never sees the verifier source, can only write `handler.mjs`, and the verifier's SHA-256 is pinned on the host and **re-measured inside the final VM** | `summary.verifierIntegrity` in every receipt |
+| "It passed in a VM that the model's code had already touched" | The work VM is destroyed. The final verdict runs in a **brand-new VM** holding only the final handler and the frozen verifier | `summary.sandboxes` in every receipt |
+
+**Fresh VM rather than fork, by design.** CreateOS can fork a running sandbox, but a fork copies memory, processes and files that the model's code has already touched. For the verdict we deliberately use a clean VM with nothing inherited.
+
+**Exit code and JSON must agree.** A run is VERIFIED only if the verdict JSON parses, all of V1–V6 are present and passing, *and* the process exit code is 0. Anything else is FAILED, INCONCLUSIVE or INFRA_ERROR, and is shown as such.
 
 ## Why this is hard / design decisions
 
